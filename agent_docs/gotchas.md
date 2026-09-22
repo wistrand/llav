@@ -12,6 +12,13 @@
   and why single questions use `cache_prompt: false`.
 - **Context checkpoints are expensive on this model.** Each save copies about 50 MB of recurrent state off
   the GPU. Turning them back on roughly triples per-question latency; see [research.md](research.md).
+- **Never reuse a slot's cache across questions without checking `Engine.trims`.** On Qwen3.5 a partial
+  cache match recomputes the whole prompt (13.38 s against 1.08 s for five questions) and returns
+  probabilities that differ by up to 0.06, because the recurrent state never rolled back. The startup probe
+  decides; a wrong answer there is slow and quietly wrong, not an error.
+- **A cached slot file is only valid for the run that wrote it.** Filenames carry a per-run id, so a file
+  left in a `--slot-dir` by an earlier llav is never restored. Restoring a file from another model or
+  context size would be silently wrong.
 - **`n_probs` probabilities depend on temperature.** Only `temperature < 0` gives a plain softmax over raw
   logits. With sampling settings or `post_sampling_probs`, the numbers reflect the sampler chain and are
   not the readout llav was validated with.

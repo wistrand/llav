@@ -26,6 +26,8 @@ probabilities of the answer labels straight from the logits. Nothing is generate
 - **Runs on any llama.cpp backend**, including Vulkan, CUDA, Metal, SYCL and CPU.
 - **Shared state.** When a request asks several questions about one state, the state is evaluated once and
   reused for every question.
+- **State cache.** Evaluated states are kept for later requests, so follow-up questions about the same text
+  skip the expensive part: about 3 s down to 0.2 s on the laptop below.
 
 ## Quick start
 
@@ -49,17 +51,17 @@ probabilities of the answer labels straight from the logits. Nothing is generate
    ```
 
    Other pinned models, all Apache 2.0, take the name as a second argument
-   (`scripts/fetch-model.sh ~/models qwen3.5-2b`). Times are for 10 questions on a 1,800-token state on the
-   laptop under Performance. Rows are in order of preference; the reasons are in
-   [agent_docs/research.md](agent_docs/research.md).
+   (`scripts/fetch-model.sh ~/models qwen3.5-2b`). Times are on the laptop under Performance, 1,800-token
+   state: a first request of 10 questions, and 5 questions on a state the cache already holds. Rows are in
+   order of preference; the reasons are in [agent_docs/research.md](agent_docs/research.md).
 
-   | Model                                                                           | Argument             |   Size | Long state, 10 q |
-   |---------------------------------------------------------------------------------|----------------------|-------:|-----------------:|
-   | [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) (default)                  | `qwen3.5-4b`         | 4.6 GB |            4.8 s |
-   | [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B)                            | `qwen3.5-2b`         | 2.1 GB |            2.2 s |
-   | [IBM Granite 4.0 H Tiny](https://huggingface.co/ibm-granite/granite-4.0-h-tiny) | `granite-4.0-h-tiny` | 7.4 GB |            4.6 s |
-   | [IBM Granite 4.2 3B](https://huggingface.co/ibm-granite/granite-4.2-3b)         | `granite-4.2-3b`     | 3.9 GB |            4.9 s |
-   | [SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)                   | `smollm3-3b`         | 3.3 GB |            5.0 s |
+   | Model                                                                           | Argument             |   Size | Cold 10 q | Repeat 5 q |
+   |---------------------------------------------------------------------------------|----------------------|-------:|----------:|-----------:|
+   | [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) (default)                  | `qwen3.5-4b`         | 4.6 GB |     5.0 s |     0.88 s |
+   | [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B)                            | `qwen3.5-2b`         | 2.1 GB |     1.9 s |     0.42 s |
+   | [IBM Granite 4.0 H Tiny](https://huggingface.co/ibm-granite/granite-4.0-h-tiny) | `granite-4.0-h-tiny` | 7.4 GB |     3.1 s |     0.89 s |
+   | [IBM Granite 4.2 3B](https://huggingface.co/ibm-granite/granite-4.2-3b)         | `granite-4.2-3b`     | 3.9 GB |     4.5 s |     0.98 s |
+   | [SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)                   | `smollm3-3b`         | 3.3 GB |     4.0 s |     0.77 s |
 
    The agreement figures under How it works were measured with Qwen3.5-4B only. The others passed a
    19-question screening and scored 10 to 14 of 17 harder questions, against 17 for the default; their
@@ -138,9 +140,10 @@ The request is `{"state", "model", "questions"}`:
   levels.
 - **`confidence`** is `1 − H(p)/ln(n)`: normalized entropy, 1 when all the probability is on one option and 0
   when it is uniform. TypeSafe does not publish its formula, so this is llav's own definition.
-- **`usage.input_tokens`** counts the prompt tokens llav actually evaluated. A shared state is counted once.
-  **`output_tokens`** is always 0.
-- **Timing headers:** each response carries `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`.
+- **`usage.input_tokens`** counts the prompt tokens llav actually evaluated. A shared state is counted once,
+  and not at all when it comes from the state cache. **`output_tokens`** is always 0.
+- **Timing headers:** each response carries `X-Llav-Seconds`, `X-Llav-Shared-State-Tokens` and
+  `X-Llav-State-Cache` (`hit`, `miss` or `off`).
 
 Errors return a JSON `detail`:
 
@@ -206,11 +209,26 @@ owned decisions:
 That check used SemIf's own option wording. llav's choice folding (`key: description`) and its `Yes`/`No`
 noul options change the prompt, so the same accuracy is expected but not measured.
 
-**Shared state.** Qwen3.5 mixes attention with recurrent layers, and llama.cpp cannot roll a recurrent
-state back to a shared prefix without context checkpoints. Those checkpoints copy about 50 MB off the GPU
-on every request. For a request with several questions, llav therefore:
-1. Evaluates the state prefix once and saves the slot to a file with `/slots/{id}?action=save`.
-2. Before each question, restores that file (about 20 ms) and evaluates only the question and options.
+**Shared state.** Evaluating the state is most of the work: about 3 s for 1,800 tokens against 0.15 s for a
+question on top of it. llav evaluates it once per request and saves the slot to a file with
+`/slots/{id}?action=save`.
+
+Whether that file is needed between questions depends on the model, so llav probes the backend at startup
+rather than keeping a list of model names. Attention-only models (Granite, SmolLM3) roll their cache back to
+the shared prefix by themselves. Qwen3.5 mixes attention with recurrent layers, which llama.cpp cannot roll
+back without context checkpoints, and those copy about 50 MB off the GPU per request; such a model gets the
+saved file restored before every question, about 20 ms each. `GET /v1/models` reports which path is in use
+as `backend.prefix_reuse`.
+
+**State cache.** The saved file is kept and reused by later requests about the same state, keyed by the
+state's tokens. A hit restores in about 20 ms instead of evaluating the state again, and those tokens are
+not counted in `usage`. `--state-cache N` sets how many states are kept (default 4, `0` disables); each
+costs a file in the slot directory. Measured on the laptop below, 1,800-token state:
+
+| Request                                  | Cold   | Repeat state |
+|------------------------------------------|-------:|-------------:|
+| 5 questions                              | 3.89 s |       0.85 s |
+| 1 question                               | 3.20 s |       0.18 s |
 
 llama-server runs with `--ctx-checkpoints 0 --slot-save-path <tmp>`, which llav sets when it manages the
 process.
@@ -243,8 +261,9 @@ Measured on the setup below, for 21 yes/no questions about one state:
 | A prompt per question with llama-server's prompt cache |        0.69 |
 | llav (state evaluated once, restored per question)     |     2.3–2.8 |
 
-All three rows use the single-pass readout; none of them generates text. A generate-and-parse baseline was
-not measured, so the no-generation gain comes on top of these numbers but has no figure of its own.
+All three rows use the single-pass readout; none of them generates text, and all three evaluate the state
+for the first time; a cached state raises llav's row to about 5 decisions/s. A generate-and-parse baseline
+was not measured, so the no-generation gain comes on top of these numbers but has no figure of its own.
 [agent_docs/research.md](agent_docs/research.md) has the details.
 
 ## Performance
@@ -252,15 +271,18 @@ not measured, so the no-generation gain comes on top of these numbers but has no
 These figures come from a laptop with an Intel Arc B390 iGPU on Vulkan, using Q8_0. Each state is about
 1,800 tokens with 21 yes/no questions.
 
-| Workload | Time |
-|---|---:|
-| 21 questions in one request | 7.0 s (3.0 decisions/s) |
-| The same 21 questions as separate requests | 66 s |
-| Evaluating the state once | ~2.5–3.4 s |
-| Each further question on a restored state | ~0.2–0.25 s |
+| Workload                                                 |                    Time |
+|----------------------------------------------------------|------------------------:|
+| 21 questions in one request, state not seen before       | 6.5 s (3.2 decisions/s) |
+| The same 21 questions as separate requests, state cached |                   4.4 s |
+| The same, with `--state-cache 0`                         |                    67 s |
+| Evaluating a state the cache does not hold               |               2.5–3.4 s |
+| Each further question on that state                      |              0.2–0.25 s |
+| Restoring a cached state                                 |             about 20 ms |
 
 Throughput depends heavily on the GPU. llama.cpp does not batch several sequences of this hybrid model
-efficiently, so extra `--slots` add concurrency but little throughput.
+efficiently, so extra `--slots` add concurrency but little throughput. Once a state is cached, splitting
+questions across requests costs no more than asking them together.
 
 ### Expected scaling on other hardware
 
@@ -269,31 +291,35 @@ been run on any of this hardware.
 
 A request has two parts that scale differently:
 - **Evaluating the state** is a large batch of tokens, limited by GPU compute. It speeds up roughly in line
-  with the GPU.
-- **Each question** is a slot restore, two HTTP round trips to llama-server, and a pass of about 80 tokens.
-  A pass that short is limited by memory bandwidth and per-step overhead, so it improves far less. Expect a
-  floor of roughly 20–40 ms per question even on the fastest cards.
+  with the GPU, and a state the cache already holds skips it entirely.
+- **Each question** is a pass of about 80 tokens, two HTTP round trips, and, on a backend that needs the
+  slot file, a restore. A pass that short is limited by per-step overhead rather than by context: on the
+  laptop a readout takes 124 ms on an 83-token state and 149 ms on a 2,057-token one. Expect a floor of
+  roughly 20–40 ms per question even on the fastest cards.
 
-On a large GPU the number of questions, not the length of the state, dominates a request's time.
+So the number of questions, not the length of the state, sets the time on a large GPU, and it is all that
+is left once the state is cached.
 
-Estimated, 21 questions on a 1,800-token state:
+Estimated, 21 questions on a 1,800-token state, first request and a repeat of the same state:
 
-| Hardware                     |      State | Per question |   Request | Decisions/s |
-|------------------------------|-----------:|-------------:|----------:|------------:|
-| Arc B390 iGPU (measured)     |  2.5–3.4 s |   0.2–0.25 s |     7.0 s |           3 |
-| Apple M4 Pro/Max (Metal)     |  0.8–1.5 s |    50–100 ms |   2–3.5 s |        6–10 |
-| RTX 4070 / 3090 class (CUDA) |  0.2–0.4 s |     30–50 ms | 0.8–1.4 s |       15–25 |
-| RTX 4090 / 5090 (CUDA)       | 0.1–0.25 s |     20–35 ms | 0.5–1.0 s |       20–40 |
-| H100                         |     ~0.1 s |     20–30 ms | 0.5–0.7 s |       30–40 |
-| 16-core desktop CPU, no GPU  |    10–20 s |      0.5–1 s |   20–40 s |       0.5–1 |
+| Hardware                     |      State | Per question | First request | Repeat request | Decisions/s, repeat |
+|------------------------------|-----------:|-------------:|--------------:|---------------:|--------------------:|
+| Arc B390 iGPU (measured)     |  2.5–3.4 s |   0.2–0.25 s |         7.0 s |          3.4 s |                   6 |
+| Apple M4 Pro/Max (Metal)     |  0.8–1.5 s |    50–100 ms |       2–3.5 s |      1.1–2.1 s |               10–19 |
+| RTX 4070 / 3090 class (CUDA) |  0.2–0.4 s |     30–50 ms |     0.8–1.4 s |      0.7–1.1 s |               19–30 |
+| RTX 4090 / 5090 (CUDA)       | 0.1–0.25 s |     20–35 ms |     0.5–1.0 s |      0.5–0.8 s |               26–46 |
+| H100                         |     ~0.1 s |     20–30 ms |     0.5–0.7 s |      0.5–0.7 s |               32–46 |
+| 16-core desktop CPU, no GPU  |    10–20 s |      0.5–1 s |       20–40 s |        10–21 s |                 1–2 |
 
 - **The largest uncertainty is Qwen3.5's recurrent layers.** llama.cpp's kernels for them are newer and
   less tuned than its attention kernels. The GPU rows could be off by a factor of two.
 - **An H100 gains little over a 4090.** A 4B model is too small to use it; the per-question overhead sets
-  the limit.
+  the limit, and on a repeat request it is the only cost left.
 - **Concurrency across states** with `--slots` may scale better on large GPUs than on the laptop. Untested.
-- **Past about 20 decisions/s, software matters more than hardware.** Fewer round trips per question, or
-  evaluating all of a request's questions in one batched pass, would lower the per-question floor.
+- **Past about 20 decisions/s, software matters more than hardware.** The per-question floor comes from
+  llama.cpp evaluating each question's tokens in its own pass; only a batched decode over a shared prefix
+  removes it, and llama-server's HTTP API cannot express that. See
+  [agent_docs/research.md](agent_docs/research.md).
 
 ## Differences from Jev
 
@@ -310,7 +336,7 @@ Estimated, 21 questions on a 1,800-token state:
 
 ```
 llav --gguf FILE [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
-     [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--web-ui]
+     [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
 
 llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own llama-server

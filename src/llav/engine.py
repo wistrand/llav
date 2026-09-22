@@ -12,6 +12,8 @@ llama-server must run with --ctx-checkpoints 0 and --slot-save-path.
 
 from __future__ import annotations
 
+from collections import OrderedDict
+import hashlib
 import http.client
 import json
 import math
@@ -28,6 +30,10 @@ from .prompt import LABELS, evidence_opening, messages
 from .questions import Question
 
 TEMPLATE_KWARGS = {"enable_thinking": False}
+
+# A single question is primed separately only above this many state tokens, where a later cache hit saves
+# more than the extra pass costs.
+STATE_CACHE_MIN_TOKENS = 256
 
 
 class EngineError(Exception):
@@ -100,12 +106,13 @@ def softmax(values: list[float]) -> list[float]:
 
 class Engine:
     def __init__(self, client: LlamaClient, slots: int, slot_ctx: int, slot_dir: Path,
-                 queue_timeout: float = 30, n_probs: int = 128):
+                 queue_timeout: float = 30, n_probs: int = 128, state_cache: int = 4):
         self.client = client
         self.slot_ctx = slot_ctx
         self.slot_dir = Path(slot_dir)
         self.queue_timeout = queue_timeout
         self.n_probs = n_probs
+        self.state_cache = max(0, state_cache)
         self.free = queue.Queue()
         for slot in range(slots):
             self.free.put(slot)
@@ -119,6 +126,31 @@ class Engine:
             raise EngineError("Answer label tokens collide")
         self._boundary = {}
         self._boundary_lock = threading.Lock()
+        self._run = uuid.uuid4().hex[:8]  # so stale files from an earlier run are never restored
+        self._cached = OrderedDict()  # cache filename -> None, least recently used first
+        self._cache_lock = threading.Lock()
+        self.trims = self._probe_trim()
+
+    def _probe_trim(self) -> bool:
+        """Can the backend roll its cache back to a shared prefix, or must a slot file restore it?
+
+        Attention-only models trim the cache and re-evaluate just the new tokens. Recurrent and hybrid
+        models (Qwen3.5) recompute the whole prompt and answer from a state that never rolled back, so
+        they need the slot file. Probing beats a model list: it asks the backend what it actually does.
+        """
+        base = self.client.tokenize("probe " * 40, special=False)
+        try:
+            self.client.post("/slots/0?action=erase", {})
+            for label in self.label_ids[:2]:
+                answer = self.client.post("/completion", {
+                    "prompt": base + [label], "n_predict": 1, "temperature": -1, "cache_prompt": True,
+                    "id_slot": 0,
+                })
+            evaluated = int((answer.get("timings") or {}).get("prompt_n") or len(base))
+            self.client.post("/slots/0?action=erase", {})
+        except EngineError:
+            return False  # a backend that cannot answer the probe gets the path that always works
+        return evaluated <= len(base) // 2
 
     def _boundary_ok(self, tail: str, count: int) -> bool:
         """Appending a label to the template tail must add exactly its token. Cached per tail."""
@@ -174,11 +206,70 @@ class Engine:
         logprobs = [floor if value is None else value for value in found]
         return softmax(logprobs), int((response.get("timings") or {}).get("prompt_n") or 0)
 
+    def _cache_name(self, prefix: list[int]) -> str:
+        digest = hashlib.sha256(b"".join(token.to_bytes(4, "big") for token in prefix)).hexdigest()[:32]
+        return f"llav-{self._run}-{digest}.bin"
+
+    def _drop(self, name: str) -> None:
+        self._cached.pop(name, None)
+        try:
+            os.remove(self.slot_dir / name)
+        except OSError:
+            pass
+
+    def _load_prefix(self, slot: int, prefix: list[int]) -> tuple[str, int]:
+        """Leave `slot` holding exactly `prefix`; returns the slot file (or "") and the tokens evaluated.
+
+        A cached state is restored in about 20 ms, against seconds to evaluate it again. The file is kept
+        only when a later question or request can use it: a trimming backend serving one question needs
+        none.
+        """
+        name = self._cache_name(prefix)
+        with self._cache_lock:
+            hit = name in self._cached
+            if hit:
+                self._cached.move_to_end(name)
+        if hit:
+            try:
+                self.client.post(f"/slots/{slot}?action=restore", {"filename": name})
+                return name, 0
+            except EngineError:
+                with self._cache_lock:  # the file went missing; fall through and evaluate the state again
+                    self._drop(name)
+        self.client.post(f"/slots/{slot}?action=erase", {})
+        primed = self.client.post("/completion", {
+            "prompt": prefix, "n_predict": 0, "cache_prompt": True, "id_slot": slot,
+        })
+        evaluated = int((primed.get("timings") or {}).get("prompt_n") or len(prefix))
+        if not self.state_cache and self.trims:
+            return "", evaluated  # nothing will restore it: no file
+        self.client.post(f"/slots/{slot}?action=save", {"filename": name})
+        if not self.state_cache:
+            return name, evaluated  # this request's questions restore it; the caller deletes it
+        with self._cache_lock:
+            self._cached[name] = None
+            self._cached.move_to_end(name)
+            while len(self._cached) > self.state_cache:
+                self._drop(next(iter(self._cached)))
+        return name, evaluated
+
+    def clear_cache(self) -> None:
+        """Remove every slot file this engine wrote. Called on shutdown; the files are useless after it."""
+        with self._cache_lock:
+            for name in list(self._cached):
+                self._drop(name)
+
     def evaluate(self, state, questions: list[Question]) -> tuple[list[list[float]], dict, dict]:
         """Score every question against `state`; returns per-question probabilities, usage, and timing."""
         encoded = [self.encode(state, question) for question in questions]
         counts = [len(question.descriptions) for question in questions]
-        prefix = self.state_prefix(state) if len(encoded) > 1 else []
+        # One question is worth a shared prefix only when the state can be cached for a later request:
+        # priming it costs an extra pass, and pays for itself the next time the same state arrives.
+        prefix = []
+        if len(encoded) > 1 or self.state_cache:
+            prefix = self.state_prefix(state)
+            if len(encoded) == 1 and len(prefix) < STATE_CACHE_MIN_TOKENS:
+                prefix = []
         try:
             slot = self.free.get(timeout=self.queue_timeout)
         except queue.Empty:
@@ -193,30 +284,28 @@ class Engine:
         computed = 0
         results = []
         shared = bool(prefix) and all(ids[: len(prefix)] == prefix and len(ids) > len(prefix) for ids in encoded)
+        cached = False
         if not shared:
             for ids, count in zip(encoded, counts):
                 probabilities, n = self._readout(ids, count, slot, cache=False)
                 results.append(probabilities)
                 computed += n
         else:
-            name = f"llav-{uuid.uuid4().hex}.bin"
-            self.client.post(f"/slots/{slot}?action=erase", {})
-            primed = self.client.post("/completion", {
-                "prompt": prefix, "n_predict": 0, "cache_prompt": True, "id_slot": slot,
-            })
-            computed += int((primed.get("timings") or {}).get("prompt_n") or len(prefix))
-            self.client.post(f"/slots/{slot}?action=save", {"filename": name})
+            name, evaluated = self._load_prefix(slot, prefix)
+            cached = evaluated == 0
+            computed += evaluated
             try:
-                for ids, count in zip(encoded, counts):
-                    self.client.post(f"/slots/{slot}?action=restore", {"filename": name})
+                for index, (ids, count) in enumerate(zip(encoded, counts)):
+                    # A trimming backend rolls back to the prefix by itself; the rest need the slot file.
+                    if index and not self.trims:
+                        self.client.post(f"/slots/{slot}?action=restore", {"filename": name})
                     probabilities, n = self._readout(ids, count, slot, cache=True)
                     results.append(probabilities)
                     computed += n
             finally:
-                try:
-                    os.remove(self.slot_dir / name)
-                except OSError:
-                    pass
+                if name and not self.state_cache:
+                    self._drop(name)
         usage = {"input_tokens": computed, "output_tokens": 0}
-        meta = {"shared_state_tokens": len(prefix) if shared else 0, "seconds": time.perf_counter() - started}
+        meta = {"shared_state_tokens": len(prefix) if shared else 0, "seconds": time.perf_counter() - started,
+                "state_cache": ("hit" if cached else "miss") if shared and self.state_cache else "off"}
         return results, usage, meta

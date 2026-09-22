@@ -9,6 +9,7 @@ Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `scripts/fetch-model.sh`
 - Prompt fidelity and agreement
 - Reusing a shared state
 - Backend and runtime comparisons
+- Where a request's time goes
 - Other models
 - Rejected approaches
 - Open questions
@@ -62,6 +63,44 @@ full run had longer state reads, possibly GPU throttling (not confirmed).
 
 SYCL gained about 3% end to end on serial-restored, but needs the oneAPI toolkit and
 `LD_LIBRARY_PATH=/opt/intel/oneapi/<version>/lib`. Vulkan is the default.
+
+## Where a request's time goes
+
+Measured 2026-09-22 on the laptop above, Qwen3.5-4B, 10 questions on a 1,793-token state, before the state
+cache existed:
+
+| Phase                                | Time   | Share |
+|--------------------------------------|-------:|------:|
+| Erase, prime and save the state      | 2.80 s |   60% |
+| Readouts (10 x 157 ms)               | 1.57 s |   34% |
+| Restores (10 x 20 ms)                | 0.20 s |    4% |
+| llav's own work (template, tokenize) | 0.07 s |  1.3% |
+
+The readout cost is nearly fixed: 124 ms on an 83-token state, 137 ms at 1,049, 149 ms at 2,057. About
+120 ms per question is llama.cpp's small-batch overhead, not context. `n_probs` 16 against 128 changes
+nothing.
+
+Tried and rejected, same workload:
+- **llama-server flags.** Flash attention is already on (`-fa auto`); forcing it off costs 30% (6.01 s
+  against 4.65 s). `-ub 1024 -b 2048` is slower (5.47 s), and with `-fa on` slower still (5.99 s).
+- **Parallel slots, now on an attention-only model too.** Granite 4.2 3B, 12 questions: 2.14 s serial
+  against 4.51 s over 4 slots, and probabilities moved by up to 0.29. The earlier hybrid result holds for
+  dense models.
+
+Adopted:
+- **Skipping the slot file where the backend allows it.** Granite 4.2 3B and SmolLM3 reuse the prompt cache
+  across questions with identical logprobs (max difference 0.0000), saving the 0.4 s save and 20 ms per
+  question. Qwen3.5-4B fails the same test: 13.38 s against 1.08 s for five questions, recomputing the whole
+  prompt each time, and its logprobs differ by 0.06, so it must keep the file. `Engine` decides with a
+  startup probe.
+- **Caching evaluated states across requests.** Same state, 1,800 tokens: five questions 3.89 s cold against
+  0.85 s on a repeat, one question 3.20 s against 0.18 s, probabilities identical. A cold request is
+  unchanged for a restoring backend (3.85 s against 3.91 s with the cache off) and costs a trimming one the
+  0.4 s save it would otherwise skip (3.57 s against 3.18 s).
+
+Still open: batching every question's suffix into one `llama_decode` over a shared prefix would remove the
+120 ms floor. SemIf's torch shared mode reached 5.6 to 6.7 decisions/s that way against 2.3 to 2.8 here.
+llama-server's HTTP API cannot express it.
 
 ## Other models
 
@@ -165,18 +204,23 @@ easy, hard, order and timing checks, Q8_0, after stopping every other llama-serv
 - Neither is pinned in `scripts/fetch-model.sh`. Qwen3.6-35B-A3B is the candidate for a quality option on a
   machine with a large GPU; unmeasured there.
 
-Ranking of the pinned models as candidates for the default, revised 2026-09-22 after the harder questions.
-Qwen3.5-4B stays the default; switching needs an accuracy run comparable to its `shape777` result, not this
-screening. Ranks 2 and 3 are close: Granite 4.0 H Tiny is right more often, Qwen3.5-2B is wrong less
-confidently and twice as fast.
+Ranking of the pinned models as candidates for the default, revised 2026-09-22 after the harder questions
+and re-timed with the state cache and the trim probe in place. Same laptop, 1,800-token state, 5 questions;
+"repeat" is the same state arriving in a later request. Qwen3.5-4B stays the default; switching needs an
+accuracy run comparable to its `shape777` result, not this screening.
 
-| Rank | Model              | Reason                                                                                                     |
-|-----:|--------------------|------------------------------------------------------------------------------------------------------------|
-|    1 | Qwen3.5-4B         | Only validated model; 19/19 easy, 17/17 hard, no flips; probabilities informative                          |
-|    2 | Qwen3.5-2B         | 13/17 hard with misses near 0.5; twice as fast, 2.1 GB; same family and template as the default            |
-|    3 | Granite 4.0 H Tiny | Best non-Chinese, 14/17 hard, but wrong at 0.99 to 1.00 when it misses; 7.4 GB and no faster on the laptop |
-|    4 | Granite 4.2 3B     | 13/17 hard; no order bias, but probabilities saturate at 0 or 1, including on its misses                   |
-|    5 | SmolLM3-3B         | 10/17 hard; misreads negation; the prompt carries today's date (see [gotchas.md](gotchas.md))              |
+| Rank | Model              | Path      | Cold 5 q | Repeat 5 q |  Easy |  Hard | Reason                                                                               |
+|-----:|--------------------|-----------|---------:|-----------:|------:|------:|--------------------------------------------------------------------------------------|
+|    1 | Qwen3.5-4B         | slot-file |   4.07 s |     0.88 s | 19/19 | 17/17 | Only validated model; the only one that answers every question right; no order flips |
+|    2 | Qwen3.5-2B         | slot-file |   1.54 s |     0.42 s | 18/19 | 13/17 | Fastest pinned model, 2.1 GB, same family and template; misses sit near 0.5          |
+|    3 | Granite 4.0 H Tiny | slot-file |   2.30 s |     0.89 s | 18/19 | 14/17 | Best non-Chinese, and fastest of them; wrong at 0.99 to 1.00 when it misses; 7.4 GB  |
+|    4 | Granite 4.2 3B     | trim      |   3.70 s |     0.98 s | 18/19 | 13/17 | No order bias at all, but probabilities saturate at 0 or 1, including on misses      |
+|    5 | SmolLM3-3B         | trim      |   3.02 s |     0.77 s | 17/19 | 10/17 | Misreads negation; the prompt carries today's date (see [gotchas.md](gotchas.md))    |
+
+The optimizations did not reorder anything. They cut every model's repeat cost to between 0.42 s and 0.98 s,
+which narrows the speed argument for a weaker model, and the trim path is worth less than the model's own
+size: Granite 4.2 3B trims and is still slower than Granite 4.0 H Tiny, which restores a slot file but
+activates about 1B parameters.
 
 `scripts/fetch-model.sh` pins the default plus Qwen3.5-2B, Granite 4.0 H Tiny, Granite 4.2 3B and SmolLM3-3B.
 Granite 4.0 Micro was dropped: Granite 4.2 3B matched or beat it on every measure. A few-shot prompt or a

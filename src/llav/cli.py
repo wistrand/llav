@@ -52,6 +52,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="Do not accept model 'jev-latest' as an alias (accepted by default for SDK compatibility)")
     parser.add_argument("--web-ui", action="store_true", help="Serve a browser UI for trying questions at /")
     parser.add_argument("--queue-timeout", type=float, default=30, help="Seconds to wait for a free slot before 529")
+    parser.add_argument("--state-cache", type=int, default=4,
+                        help="Evaluated states kept as slot files for reuse by later requests (0 disables)")
 
     spawn = parser.add_argument_group("managed llama-server")
     spawn.add_argument("--gguf", type=Path, help="Model file; llav starts llama-server with the required flags")
@@ -81,11 +83,14 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--ctx must be at least 1")
     if not args.queue_timeout >= 0:
         parser.error("--queue-timeout must not be negative")
+    if args.state_cache < 0:
+        parser.error("--state-cache must not be negative")
 
     signal.signal(signal.SIGTERM, _raise_interrupt)
     process = None
     temporary = None
     httpd = None
+    engine = None
     try:
         httpd = bind(args.host, args.port)
         _banner()
@@ -108,11 +113,12 @@ def main(argv: list[str] | None = None) -> None:
             if slot_ctx <= 0:
                 parser.error("Could not read the per-slot context size from /props")
             slot_dir, source = args.slot_dir, Path(props.get("model_path") or "model")
-        engine = Engine(client, slots, slot_ctx, slot_dir, args.queue_timeout)
+        engine = Engine(client, slots, slot_ctx, slot_dir, args.queue_timeout, state_cache=args.state_cache)
         model_id = args.model_id or f"llav-{source.stem.lower()}"
         aliases = ["llav-latest"] + ([] if args.no_jev_alias else ["jev-latest"])
         health = (lambda: process.alive()) if process else (lambda: True)
-        backend = {"runtime": "llama.cpp", "model_file": source.name, "slots": slots, "slot_ctx": slot_ctx}
+        backend = {"runtime": "llama.cpp", "model_file": source.name, "slots": slots, "slot_ctx": slot_ctx,
+                   "prefix_reuse": "trim" if engine.trims else "slot-file"}
         web_ui = WEB_UI.read_bytes() if args.web_ui else None
         serve(httpd, App(engine, model_id, aliases, args.api_key, backend, health, web_ui))
     except (EngineError, RuntimeError, OSError) as error:
@@ -121,6 +127,8 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if engine:
+            engine.clear_cache()
         if httpd:
             httpd.server_close()
         if process:

@@ -7,7 +7,7 @@ llav is an HTTP server that answers typed decision questions (`noul`, `choice`, 
 System One API (`POST /v1/systemone`). Each question is one forward pass. llav reads the next-token
 log-probabilities of the answer letters `A`–`Z` and softmaxes them over the declared options; it never
 generates text. When a request asks several questions about one state, llav evaluates the state prefix
-once, saves the llama-server slot to a file, and restores it before each question.
+once and reuses it for every question; evaluated states are cached as slot files for later requests.
 
 ```
 client ──HTTP──> server.py ──> questions.py (validate, build answers)
@@ -69,9 +69,11 @@ Quick start lists install options per platform.
   `logit_bias`.
 - Always tokenize caller text (state, instructions, criteria) with `parse_special: false`, so it cannot
   forge chat-template control tokens. Only template text is tokenized with special-token parsing.
-- Always run llama-server with `--ctx-checkpoints 0` and `--slot-save-path`. The shared-state path restores
-  the saved prefix before every question; never rely on a slot's cache surviving between requests or
-  between questions.
+- Always run llama-server with `--ctx-checkpoints 0` and `--slot-save-path`. Whether a slot's cache may be
+  reused between questions is decided by `Engine`'s startup probe (`trims`), never by a model name; a
+  backend that fails the probe restores the saved prefix before every question.
+- Never let a cached slot file outlive the state that produced it: files are keyed by the prefix tokens and
+  a per-run id, evicted by `--state-cache`, and deleted in `Engine.clear_cache` at shutdown.
 - Always return a slot to `Engine.free` in a `finally`, or the server loses capacity permanently.
 - Keep the response body to the public System One shape: `model`, `answers`, `usage` with only
   `input_tokens` and `output_tokens`. Put llav-specific data in `X-Llav-*` headers.

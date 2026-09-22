@@ -30,8 +30,10 @@ CONTROL_ID = 100_000
 class FakeClient:
     """Character-level tokenizer; label logprobs come from `scores` keyed by letter."""
 
-    def __init__(self, scores=None):
+    def __init__(self, scores=None, trims=False, slot_dir=None):
         self.scores = scores or {"A": -0.1, "B": -2.5}
+        self.trims = trims  # answer the engine's probe as an attention-only backend would
+        self.slot_dir = slot_dir  # when set, saves write a file, as llama-server does
         self.calls = []
         self.tokenized = []
 
@@ -52,9 +54,14 @@ class FakeClient:
 
     def post(self, path, body):
         self.calls.append(path)
+        if self.slot_dir and path.endswith("action=save"):
+            (Path(self.slot_dir) / body["filename"]).write_bytes(b"slot state")
         if path == "/completion":
             if body["n_predict"] == 0:
                 return {"timings": {"prompt_n": len(body["prompt"])}}
+            if "n_probs" not in body:  # the startup probe: a trimming backend evaluates only the new tokens
+                evaluated = 1 if self.trims else len(body["prompt"])
+                return {"timings": {"prompt_n": evaluated}}
             top = [{"id": ord(letter), "logprob": value} for letter, value in self.scores.items()]
             top.append({"id": ord("z"), "logprob": -30.0})
             return {"completion_probabilities": [{"top_logprobs": top}], "timings": {"prompt_n": 7}}
@@ -158,9 +165,63 @@ class EngineTest(unittest.TestCase):
         results, usage, meta = self.engine(client).evaluate({"ticket": "x"}, questions)
         self.assertEqual(len(results), 2)
         self.assertEqual(client.calls.count("/slots/0?action=save"), 1)
-        self.assertEqual(client.calls.count("/slots/0?action=restore"), 2)
+        # The first question extends the state the priming left in the slot; only the second restores it.
+        self.assertEqual(client.calls.count("/slots/0?action=restore"), 1)
         self.assertGreater(meta["shared_state_tokens"], 0)
+        self.assertEqual(meta["state_cache"], "miss")
         self.assertEqual(usage["input_tokens"], meta["shared_state_tokens"] + 2 * 7)
+
+    def test_trimming_backend_needs_no_slot_file(self):
+        client = FakeClient(trims=True)
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "noul", "instructions": "q2"},
+        }))
+        engine = Engine(client, 1, 100_000, Path(self.slot_dir.name), queue_timeout=1, state_cache=0)
+        results, _, meta = engine.evaluate({"ticket": "x"}, questions)
+        self.assertEqual(len(results), 2)
+        self.assertNotIn("/slots/0?action=save", client.calls)
+        self.assertNotIn("/slots/0?action=restore", client.calls)
+        self.assertEqual(meta["state_cache"], "off")
+
+    def test_repeated_state_is_restored_from_the_cache(self):
+        client = FakeClient()
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "noul", "instructions": "q2"},
+        }))
+        engine.evaluate({"ticket": "x"}, questions)
+        client.calls.clear()
+        results, usage, meta = engine.evaluate({"ticket": "x"}, questions)
+        self.assertEqual(len(results), 2)
+        self.assertNotIn("/slots/0?action=erase", client.calls)  # the state is not evaluated again
+        self.assertEqual(meta["state_cache"], "hit")
+        self.assertEqual(usage["input_tokens"], 2 * 7)  # only the questions were evaluated
+
+    def test_state_cache_evicts_the_oldest_and_clears(self):
+        client = FakeClient(slot_dir=self.slot_dir.name)
+        engine = Engine(client, 1, 100_000, Path(self.slot_dir.name), queue_timeout=1, state_cache=1)
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "noul", "instructions": "q2"},
+        }))
+        engine.evaluate({"ticket": "x"}, questions)
+        engine.evaluate({"ticket": "y"}, questions)
+        self.assertEqual(len(list(Path(self.slot_dir.name).iterdir())), 1)
+        engine.clear_cache()
+        self.assertEqual(list(Path(self.slot_dir.name).iterdir()), [])
+
+    def test_one_question_on_a_long_state_primes_it_for_later(self):
+        client = FakeClient()
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}}, state="x" * 400))
+        engine.evaluate("x" * 400, questions)
+        self.assertEqual(client.calls.count("/slots/0?action=save"), 1)
+        client.calls.clear()
+        _, usage, meta = engine.evaluate("x" * 400, questions)
+        self.assertEqual(meta["state_cache"], "hit")
+        self.assertEqual(usage["input_tokens"], 7)
 
     def test_missing_label_uses_smallest_returned_logprob(self):
         client = FakeClient({"A": -0.05})
@@ -286,7 +347,7 @@ class FakeEngine:
         if self.error:
             raise self.error
         return [[0.75, 0.25] for _ in questions], {"input_tokens": 1, "output_tokens": 0}, {
-            "seconds": 0.0, "shared_state_tokens": 0,
+            "seconds": 0.0, "shared_state_tokens": 0, "state_cache": "off",
         }
 
 

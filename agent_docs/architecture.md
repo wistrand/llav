@@ -28,8 +28,13 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
   correct but slow, so a regression here shows up only as latency.
 - The state prefix drops its last token. That token can merge with the text after the evidence value
   (`,` or `}`), so keeping it would make the prefix disagree with the full prompt.
-- The shared path erases the slot before priming. Without context checkpoints, llama-server cannot roll a
-  recurrent state back to a partial match, so a stale slot cache must not be reused.
+- The shared path erases the slot before priming a state it has not cached. Without context checkpoints,
+  llama-server cannot roll a recurrent state back to a partial match, so a stale slot cache must not be
+  reused.
+- `Engine.trims` comes from a startup probe, not a model list: the engine primes a short prefix, extends it
+  twice with different tokens, and reads `prompt_n`. An attention-only backend evaluates only the new token
+  and needs no slot file between questions; a recurrent one recomputes everything and answers from a state
+  that never rolled back, so it must restore the file.
 
 ## Components
 
@@ -61,15 +66,23 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
 
 Used when a request has more than one question and every question's tokens start with the state prefix.
 
-1. `POST /slots/{slot}?action=erase`.
-2. `/completion` with the prefix, `n_predict: 0`, `cache_prompt: true`: evaluates the state once.
-3. `POST /slots/{slot}?action=save` to a unique `llav-<uuid>.bin` in the slot directory.
-4. For each question: `action=restore`, then `_readout` with `cache_prompt: true`. The question's tokens
-   extend the restored tokens exactly, so only the question and options are computed.
-5. The slot file is deleted in a `finally`.
+Used when every question's tokens start with the state prefix: any multi-question request, and a
+single-question one whose prefix is at least `STATE_CACHE_MIN_TOKENS` while the state cache is on.
 
-Single-question requests, and any request whose prefix check fails, use `_readout` with
-`cache_prompt: false`.
+1. `Engine._load_prefix` leaves the slot holding exactly the prefix:
+   - Cache hit: `action=restore` of the state's file, about 20 ms, and no tokens evaluated.
+   - Cache miss: `action=erase`, `/completion` with the prefix and `n_predict: 0`, then `action=save` to
+     `llav-<run>-<prefix digest>.bin`. The save is skipped only when nothing will restore it: a trimming
+     backend with the cache off.
+2. For each question: `_readout` with `cache_prompt: true`. Between questions, a non-trimming backend gets
+   `action=restore` first; a trimming one rolls back by itself. The first question needs no restore either
+   way, since the slot already holds the prefix.
+3. With the cache off, the file is deleted in a `finally`; otherwise it stays for later requests, and
+   `Engine` evicts the least recently used beyond `--state-cache` and deletes the rest in `clear_cache` at
+   shutdown.
+
+Cached files are keyed by the prefix tokens and by a per-run id, so a file from an earlier llav run is
+never restored. A request whose prefix check fails uses `_readout` with `cache_prompt: false`.
 
 ## Tokenization
 

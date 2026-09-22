@@ -176,6 +176,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"model": self.app.model_id, "answers": answers, "usage": usage}, {
             "X-Llav-Seconds": f"{meta['seconds']:.3f}",
             "X-Llav-Shared-State-Tokens": str(meta["shared_state_tokens"]),
+            "X-Llav-State-Cache": meta["state_cache"],
         })
 
 
