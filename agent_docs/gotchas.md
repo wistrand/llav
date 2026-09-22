@@ -21,6 +21,10 @@
 - **Labels must be single tokens with a clean boundary.** `Engine.__init__` refuses to start if any of
   `A`–`Z` is not one token, and `_boundary_ok` rejects a chat template whose tail merges with a label. A
   new model or template can fail here at startup.
+- **SmolLM3's chat template puts today's date in the system turn.** Its prompt changes daily, so answers
+  can shift slightly from one day to the next. Nothing is cached across requests, so the date change does
+  not break prefix reuse. The template also switches thinking off only through `enable_thinking`; check the
+  rendered prompt ends in an empty `<think>` block after any template change.
 - **More than 26 choice options needs a different readout.** Two-letter labels are not single tokens in
   Qwen's vocabulary; raising `MAX_OPTIONS` alone breaks the boundary check.
 - **The `--chat-template-kwargs` flag logs a deprecation warning** in current llama.cpp, which suggests

@@ -28,7 +28,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `src/llav/runtime.py`    | `LlamaProcess`: start, health-wait, stop llama-server                  |
 | `src/llav/webui.html`    | Optional browser UI (`--web-ui`); self-contained, no external requests |
 | `tests/test_llav.py`     | Unit tests with a fake llama-server; no model needed                   |
-| `scripts/fetch-model.sh` | Downloads the pinned Qwen3.5-4B Q8_0 GGUF and checks its SHA-256       |
+| `scripts/fetch-model.sh` | Downloads a pinned Q8_0 GGUF (Qwen3.5-4B default) and checks SHA-256   |
 | `agent_docs/`            | Deep dives, linked below                                               |
 | `docs/`                  | README screenshots; retake them when the web UI changes                |
 
@@ -38,7 +38,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 PYTHONPATH=src python3 -m llav --gguf PATH.gguf          # serve (starts llama-server)
 PYTHONPATH=src python3 -m llav --help                    # flags; the source of truth for options
 python3 -m unittest discover -s tests                    # unit tests
-scripts/fetch-model.sh DIR                               # get the default model
+scripts/fetch-model.sh DIR [MODEL]                       # get a pinned model (default qwen3.5-4b)
 ```
 
 Runtime requirement: `llama-server` from llama.cpp on `PATH`, or passed with `--llama-server`. The README's

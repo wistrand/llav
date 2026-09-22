@@ -48,6 +48,18 @@ probabilities of the answer labels straight from the logits. Nothing is generate
    scripts/fetch-model.sh ~/models
    ```
 
+   Two smaller models are also pinned, both Apache 2.0. Pass the name as a second argument:
+
+   | Model                                                                         | Argument            |   Size |
+   |-------------------------------------------------------------------------------|---------------------|-------:|
+   | [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) (default)                | `qwen3.5-4b`        | 4.6 GB |
+   | [IBM Granite 4.0 Micro](https://huggingface.co/ibm-granite/granite-4.0-micro) | `granite-4.0-micro` | 3.6 GB |
+   | [SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)                 | `smollm3-3b`        | 3.3 GB |
+
+   The agreement figures under How it works were measured with Qwen3.5-4B only. The other two pass llav's
+   startup checks and answer sensibly, but their accuracy is unmeasured; see
+   [agent_docs/research.md](agent_docs/research.md).
+
 3. Serve from the checkout. Nothing needs installing:
 
    ```bash

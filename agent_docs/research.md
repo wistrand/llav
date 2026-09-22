@@ -9,6 +9,7 @@ Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `scripts/fetch-model.sh`
 - Prompt fidelity and agreement
 - Reusing a shared state
 - Backend and runtime comparisons
+- Other models
 - Rejected approaches
 - Open questions
 
@@ -62,6 +63,30 @@ full run had longer state reads, possibly GPU throttling (not confirmed).
 SYCL gained about 3% end to end on serial-restored, but needs the oneAPI toolkit and
 `LD_LIBRARY_PATH=/opt/intel/oneapi/<version>/lib`. Vulkan is the default.
 
+## Other models
+
+`scripts/fetch-model.sh` also pins IBM Granite 4.0 Micro and SmolLM3-3B (Q8_0). Checked on 2026-09-22 with
+the four-question support-ticket request from the README plus one yes/no question ("Is the customer
+praising the product?"), nothing more:
+
+- Both pass `Engine`'s startup checks: `A`–`Z` are single tokens and the template tail does not merge
+  with a label.
+- Both put at least 99.9% of the next-token probability on the declared letters for every question.
+- SmolLM3 renders `Reasoning Mode: /no_think` and an empty `<think>` block with `enable_thinking: false`.
+- Answers compared with Qwen3.5-4B on the same request:
+
+| Question                    | Qwen3.5-4B        | Granite 4.0 Micro  | SmolLM3-3B          |
+|-----------------------------|-------------------|--------------------|---------------------|
+| Urgent (noul)               | 1.00              | 1.00               | 0.99                |
+| Praising the product (noul) | 0.00              | 0.00               | 0.11                |
+| Department (choice)         | billing 0.85      | technical 1.00     | technical 0.77      |
+| Frustration (score, 0 to 2) | 0.94              | 1.00               | 1.01                |
+
+Granite is near-certain on every question, including the department question, where billing is the
+better answer for failing payouts. That points to worse calibration than Qwen's, from one example only.
+Neither model's accuracy against labelled data has been measured, and neither has been timed on a long
+state.
+
 ## Rejected approaches
 
 - **Context checkpoints for prefix reuse.** Debug logs showed llama-server saving two 50 MB checkpoints per
@@ -81,5 +106,6 @@ SYCL gained about 3% end to end on serial-restored, but needs the oneAPI toolkit
   quantization: untested.
 - A native program on libllama (`llama_memory_seq_cp` or `llama_state_seq_*` plus batched `llama_decode`)
   might match torch's batched shared mode. Untested; the Arch `llama-cpp` package ships `llama.h`.
+- Accuracy and throughput of Granite 4.0 Micro and SmolLM3-3B on the `shape777` workload: unmeasured.
 - Throughput on other GPUs (CUDA, Metal): unmeasured. The README's scaling table is an extrapolation from the
   laptop figures; replace it with measurements when available.
