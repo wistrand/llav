@@ -4,8 +4,8 @@
 # MODEL is one of:
 #   qwen3.5-4b          Qwen3.5-4B, the default; the validation in agent_docs/research.md used it
 #   qwen3.5-2b          Qwen3.5-2B, Apache 2.0; about twice as fast as the default on a long state
-#   granite-4.2-3b      IBM Granite 4.2 3B, Apache 2.0
 #   granite-4.0-h-tiny  IBM Granite 4.0 H Tiny (7B MoE, about 1B active), Apache 2.0
+#   granite-4.2-3b      IBM Granite 4.2 3B, Apache 2.0
 #   smollm3-3b          Hugging Face SmolLM3-3B, Apache 2.0
 # Only the default is validated; agent_docs/research.md has the screening results for the others.
 set -euo pipefail

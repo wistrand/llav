@@ -129,18 +129,38 @@ Findings:
 - **The speed gain from small models is capped** by per-question overhead on this laptop (see the README's
   scaling notes).
 
-Ranking of the pinned models as candidates for the default, decided 2026-09-22. Qwen3.5-4B stays the
-default; switching needs an accuracy run comparable to its `shape777` result, not this screening.
+**Harder questions.** The pinned models were then run on 17 harder questions with a defensible answer:
+sarcasm, negation, implicature, pronoun reference, and small counting and date steps (for example "moved
+from Tuesday to Thursday, then pushed back one more day"). Same day, same laptop.
 
-| Rank | Model              | Reason                                                                                                                                                                           |
-|-----:|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-|    1 | Qwen3.5-4B         | Only validated model; 19/19, no flips; probabilities informative (billing 0.85, technical 0.15)                                                                                  |
-|    2 | Qwen3.5-2B         | Twice as fast, 2.1 GB, same family and template, so the validation likely transfers best; one flip moved a probability by 0.86 and the README department question was a near-tie |
-|    3 | Granite 4.2 3B     | Best non-Chinese; no order bias, but probabilities saturate at 0 or 1                                                                                                            |
-|    4 | Granite 4.0 H Tiny | 18/19 with less saturated probabilities than the other Granites; 7.4 GB and no faster on the laptop                                                                              |
-|    5 | SmolLM3-3B         | 17/19; softer probabilities; the prompt carries today's date (see [gotchas.md](gotchas.md))                                                                                      |
+| Model              | Hard  | Misses (probability on the wrong answer)                                          |
+|--------------------|------:|-----------------------------------------------------------------------------------|
+| Qwen3.5-4B         | 17/17 | none                                                                              |
+| Granite 4.0 H Tiny | 14/17 | meeting day (1.00), apple count (0.64), ticket rule (0.99)                        |
+| Qwen3.5-2B         | 13/17 | sarcasm (0.57), pronoun (0.50), meeting day (0.78), apple count (0.53)            |
+| Granite 4.2 3B     | 13/17 | pronoun (1.00), meeting day (0.94), apple count (0.55), "still a problem?" (0.11) |
+| SmolLM3-3B         | 10/17 | seven, including two plain negations at 0.80 and 0.89                             |
 
-`scripts/fetch-model.sh` pins the default plus Qwen3.5-2B, Granite 4.2 3B, Granite 4.0 H Tiny and SmolLM3-3B.
+- Only Qwen3.5-4B handled the multi-step items; every other model missed the meeting day.
+- How a model is wrong matters as much as how often. Qwen3.5-2B's misses sit near 0.5, so its probabilities
+  flag its uncertainty. The Granites miss at 0.94 to 1.00, which no threshold can catch.
+- SmolLM3 misreads negation ("not a single tester reported a crash"), which puts it below its easy-set
+  score.
+
+Ranking of the pinned models as candidates for the default, revised 2026-09-22 after the harder questions.
+Qwen3.5-4B stays the default; switching needs an accuracy run comparable to its `shape777` result, not this
+screening. Ranks 2 and 3 are close: Granite 4.0 H Tiny is right more often, Qwen3.5-2B is wrong less
+confidently and twice as fast.
+
+| Rank | Model              | Reason                                                                                                     |
+|-----:|--------------------|------------------------------------------------------------------------------------------------------------|
+|    1 | Qwen3.5-4B         | Only validated model; 19/19 easy, 17/17 hard, no flips; probabilities informative                          |
+|    2 | Qwen3.5-2B         | 13/17 hard with misses near 0.5; twice as fast, 2.1 GB; same family and template as the default            |
+|    3 | Granite 4.0 H Tiny | Best non-Chinese, 14/17 hard, but wrong at 0.99 to 1.00 when it misses; 7.4 GB and no faster on the laptop |
+|    4 | Granite 4.2 3B     | 13/17 hard; no order bias, but probabilities saturate at 0 or 1, including on its misses                   |
+|    5 | SmolLM3-3B         | 10/17 hard; misreads negation; the prompt carries today's date (see [gotchas.md](gotchas.md))              |
+
+`scripts/fetch-model.sh` pins the default plus Qwen3.5-2B, Granite 4.0 H Tiny, Granite 4.2 3B and SmolLM3-3B.
 Granite 4.0 Micro was dropped: Granite 4.2 3B matched or beat it on every measure. A few-shot prompt or a
 fine-tuned readout might rescue the failing models, but either changes the prompt format and needs its own
 validation.

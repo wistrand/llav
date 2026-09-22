@@ -57,13 +57,14 @@ probabilities of the answer labels straight from the logits. Nothing is generate
    |---------------------------------------------------------------------------------|----------------------|-------:|-----------------:|
    | [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) (default)                  | `qwen3.5-4b`         | 4.6 GB |            4.8 s |
    | [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B)                            | `qwen3.5-2b`         | 2.1 GB |            2.2 s |
-   | [IBM Granite 4.2 3B](https://huggingface.co/ibm-granite/granite-4.2-3b)         | `granite-4.2-3b`     | 3.9 GB |            4.9 s |
    | [IBM Granite 4.0 H Tiny](https://huggingface.co/ibm-granite/granite-4.0-h-tiny) | `granite-4.0-h-tiny` | 7.4 GB |            4.6 s |
+   | [IBM Granite 4.2 3B](https://huggingface.co/ibm-granite/granite-4.2-3b)         | `granite-4.2-3b`     | 3.9 GB |            4.9 s |
    | [SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)                   | `smollm3-3b`         | 3.3 GB |            5.0 s |
 
    The agreement figures under How it works were measured with Qwen3.5-4B only. The others passed a
-   19-question screening, but their accuracy on labelled data is unmeasured. Several smaller or older models
-   (1B and under, Gemma 3, LFM2.5) failed it; see [agent_docs/research.md](agent_docs/research.md).
+   19-question screening and scored 10 to 14 of 17 harder questions, against 17 for the default; their
+   accuracy on labelled data is unmeasured. Several smaller or older models (1B and under, Gemma 3, LFM2.5)
+   failed the screening; see [agent_docs/research.md](agent_docs/research.md).
 
 3. Serve from the checkout. Nothing needs installing:
 
