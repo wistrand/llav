@@ -81,26 +81,32 @@ The readout cost is nearly fixed: 124 ms on an 83-token state, 137 ms at 1,049, 
 120 ms per question is llama.cpp's small-batch overhead, not context. `n_probs` 16 against 128 changes
 nothing.
 
-Measured on two more machines, 2026-09-22, same Qwen3.5-4B Q8_0 and the same scripts: a MacBook Air M3
-(10-core GPU, 24 GB, Metal, llama.cpp build 10964, Python 3.14) and a vast.ai RTX 3090 (24 GB, CUDA,
-Python 3.12). The 39 unit tests pass on both.
+Measured on two more machines, 2026-09-22, with `scripts/benchmark.py` on all three: the laptop, a MacBook
+Air M3 (10-core GPU, 24 GB, Metal, llama.cpp build 10964, Python 3.14) and a vast.ai RTX 3090 (24 GB, CUDA,
+Python 3.12), same Qwen3.5-4B Q8_0. The 39 unit tests pass on all three.
 
 | Phase, 10 questions on a 1,800-token state | Arc B390 iGPU | MacBook Air M3 | RTX 3090 |
-|---------------------------------------------|--------------:|---------------:|---------:|
-| Erase, prime and save the state              |        2.80 s |         5.35 s |   0.35 s |
-| Readout per question                         |        157 ms |         203 ms |    26 ms |
-| Restore per question                         |         20 ms |          12 ms |    33 ms |
-| llav's own work, per question                |          7 ms |           3 ms |    24 ms |
-| First request, 10 questions                  |        4.98 s |         7.55 s |   0.92 s |
-| Repeat request, 5 questions                  |        0.88 s |         1.09 s |   0.44 s |
-| Repeat request, 1 question                   |        0.18 s |         0.22 s |   0.12 s |
+|--------------------------------------------|--------------:|---------------:|---------:|
+| Prime the state                            |        3.09 s |         5.40 s |   0.29 s |
+| Save the slot file                         |        433 ms |          26 ms |    59 ms |
+| Restore per question                       |         17 ms |          14 ms |    34 ms |
+| Readout per question                       |        234 ms |         203 ms |    27 ms |
+| llav's own work per question               |          6 ms |           3 ms |    24 ms |
+| First request, 10 questions                |        5.11 s |         7.69 s |   1.27 s |
+| Repeat request, 10 questions               |        1.89 s |         2.20 s |   0.88 s |
+| Repeat request, 5 questions                |        0.92 s |         1.09 s |   0.48 s |
+| Repeat request, 1 question                 |        0.18 s |         0.22 s |   0.12 s |
 
 All three answer identically: 19/19 easy, 17/17 hard, no order flips, probabilities within 0.02.
+
+Readout timings vary between runs on the laptop, 157 ms to 234 ms for the same work, the higher figures
+measured while a second llav held the GPU; treat single-run phase numbers as approximate and compare whole
+requests where possible.
 
 - **The M3 is 1.5 to 1.9 times slower than the Arc iGPU** on prefill. Apple's base chips are not a speed
   upgrade here; the Pro and Max parts have several times the GPU cores and are what the README's estimates
   extrapolate to.
-- **On the 3090 the slot restore costs more than the answer**, 33 ms against 26 ms, and it does not shrink
+- **On the 3090 the slot restore costs more than the answer**, 34 ms against 27 ms, and it does not shrink
   with the GPU: it is the upload of a 107 MB saved state, not disk. Putting the slot directory on a RAM disk
   (`TMPDIR=/dev/shm`) changed nothing, 36 ms.
 - **So the trim path is worth much more on a fast GPU than on the laptop.** Granite 4.2 3B restores
@@ -109,11 +115,14 @@ All three answer identically: 19/19 easy, 17/17 hard, no order flips, probabilit
   repeats the machines disagree: 0.31 s against 0.44 s on the 3090, but 0.98 s against 0.88 s on the
   laptop, where Qwen's faster readout outweighs its restore. The faster the GPU, the more a model that
   passes the probe is worth, which the pinned-model ranking does not capture.
-- **llav's own per-question work is hardware-dependent too**: 24 ms on the vast.ai host against 7 ms on the
+- **llav's own per-question work is hardware-dependent too**: 24 ms on the vast.ai host against 6 ms on the
   laptop, from slower per-core CPU. It is 1% of a laptop request but 25% of a 3090 one, so the template and
   tokenize round trips are worth removing if llav is ever tuned for fast GPUs.
 - **A saved state is about 107 MB for this model**, so `--state-cache 4` can hold roughly 430 MB in the slot
   directory.
+- **Writing that file costs wildly different amounts**: 433 ms on the Arc laptop, 59 ms on the 3090, 26 ms on
+  the M3, where unified memory spares the copy. It is paid once per state with the cache on, so it matters
+  most for states asked about only once.
 
 Tried and rejected, same workload:
 - **llama-server flags.** Flash attention is already on (`-fa auto`); forcing it off costs 30% (6.01 s
