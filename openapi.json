@@ -1,0 +1,688 @@
+{
+  "components": {
+    "schemas": {
+      "ChoiceAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "choice": {
+            "description": "The option key with the most probability.",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "1 - H(p)/ln(n): 1 when all the probability is on one option, 0 when it is uniform. llav's own definition, not Jev's.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "probabilities": {
+            "additionalProperties": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "description": "Probability per option, summed to 1 over the declared options.",
+            "type": "object"
+          },
+          "type": {
+            "const": "choice"
+          }
+        },
+        "required": [
+          "type",
+          "choice",
+          "probabilities",
+          "confidence"
+        ],
+        "type": "object"
+      },
+      "ChoiceQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "description": "A string, or a JSON object or array, which llav serializes into the prompt.",
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object"
+                    },
+                    {
+                      "type": "array"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Option key to description, or null. At most 26 options, one per answer letter.",
+            "maxProperties": 26,
+            "minProperties": 2,
+            "type": "object"
+          },
+          "instructions": {
+            "description": "A string, or a JSON object or array, which llav serializes into the prompt.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array"
+              }
+            ]
+          },
+          "type": {
+            "const": "choice"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "type": "object"
+      },
+      "Error": {
+        "properties": {
+          "detail": {
+            "description": "A message, or the field paths that failed validation.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "properties": {
+                    "loc": {
+                      "type": "array"
+                    },
+                    "msg": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "ModelList": {
+        "properties": {
+          "data": {
+            "items": {
+              "properties": {
+                "aliases": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "backend": {
+                  "additionalProperties": true,
+                  "description": "llav-specific: runtime, model file, slots, per-slot context and the prefix-reuse path the startup probe chose.",
+                  "type": "object"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "object": {
+                  "const": "model"
+                },
+                "owned_by": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "object",
+                "aliases",
+                "owned_by",
+                "backend"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "object": {
+            "const": "list"
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ],
+        "type": "object"
+      },
+      "NoulAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "noul": {
+            "description": "Probability of Yes.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": {
+            "const": "noul"
+          }
+        },
+        "required": [
+          "type",
+          "noul"
+        ],
+        "type": "object"
+      },
+      "NoulQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "additionalProperties": false,
+            "description": "Optional wording for the two options; Yes and No by default.",
+            "properties": {
+              "false": {
+                "description": "A string, or a JSON object or array, which llav serializes into the prompt.",
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "array"
+                  }
+                ]
+              },
+              "true": {
+                "description": "A string, or a JSON object or array, which llav serializes into the prompt.",
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "instructions": {
+            "description": "A string, or a JSON object or array, which llav serializes into the prompt.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array"
+              }
+            ]
+          },
+          "type": {
+            "const": "noul"
+          }
+        },
+        "required": [
+          "type",
+          "instructions"
+        ],
+        "type": "object"
+      },
+      "Request": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "description": "The served model id or one of its aliases.",
+            "enum": [
+              "llav-<model>",
+              "llav-latest",
+              "jev-latest"
+            ],
+            "type": "string"
+          },
+          "questions": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/NoulQuestion"
+                },
+                {
+                  "$ref": "#/components/schemas/ChoiceQuestion"
+                },
+                {
+                  "$ref": "#/components/schemas/ScoreQuestion"
+                }
+              ]
+            },
+            "description": "Caller keys mapped to questions; each answer comes back under its key.",
+            "minProperties": 1,
+            "type": "object"
+          },
+          "state": {
+            "description": "The text the model reads. A string, or a JSON object or array, which llav serializes into the prompt.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "model",
+          "questions"
+        ],
+        "type": "object"
+      },
+      "Response": {
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/NoulAnswer"
+                },
+                {
+                  "$ref": "#/components/schemas/ChoiceAnswer"
+                },
+                {
+                  "$ref": "#/components/schemas/ScoreAnswer"
+                }
+              ]
+            },
+            "type": "object"
+          },
+          "model": {
+            "description": "The model that answered.",
+            "type": "string"
+          },
+          "usage": {
+            "additionalProperties": false,
+            "properties": {
+              "input_tokens": {
+                "description": "Prompt tokens llav evaluated. A shared state counts once, and not at all when it came from the state cache.",
+                "type": "integer"
+              },
+              "output_tokens": {
+                "const": 0,
+                "description": "Nothing is generated."
+              }
+            },
+            "required": [
+              "input_tokens",
+              "output_tokens"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "model",
+          "answers",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "ScoreAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "description": "1 - H(p)/ln(n): 1 when all the probability is on one option, 0 when it is uniform. llav's own definition, not Jev's.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "legend": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Level index to the level's text.",
+            "type": "object"
+          },
+          "probabilities": {
+            "additionalProperties": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "description": "Probability per option, summed to 1 over the declared options.",
+            "type": "object"
+          },
+          "score": {
+            "description": "Probability-weighted level index with 0-based levels; it can land between levels.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": {
+            "const": "score"
+          }
+        },
+        "required": [
+          "type",
+          "score",
+          "legend",
+          "probabilities",
+          "confidence"
+        ],
+        "type": "object"
+      },
+      "ScoreQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "description": "Levels in order, lowest first.",
+            "items": {
+              "description": "A string, or a JSON object or array, which llav serializes into the prompt.",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                },
+                {
+                  "type": "array"
+                }
+              ]
+            },
+            "maxItems": 10,
+            "minItems": 2,
+            "type": "array"
+          },
+          "instructions": {
+            "description": "A string, or a JSON object or array, which llav serializes into the prompt.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array"
+              }
+            ]
+          },
+          "type": {
+            "const": "score"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "Required only when llav runs with --api-key or LLAV_API_KEY.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Independent project, not affiliated with or endorsed by TypeSafe. llav reproduces the public request and response shape of the System One API, not Jev's model. Option limits, the confidence formula and the X-Llav-* headers are llav's own.",
+    "license": {
+      "name": "MIT"
+    },
+    "summary": "Typed semantic decisions read from a local model's answer-token logits.",
+    "title": "llav",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "status": {
+                      "const": "ok"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Running."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "status": {
+                      "const": "unavailable"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The backend is gone."
+          }
+        },
+        "security": [],
+        "summary": "Whether the managed llama-server is running"
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "openapi",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The OpenAPI document."
+          }
+        },
+        "security": [],
+        "summary": "This document"
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "models",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            },
+            "description": "One model."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "The served model, its aliases and backend details"
+      }
+    },
+    "/v1/systemone": {
+      "post": {
+        "operationId": "systemone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response"
+                }
+              }
+            },
+            "description": "Every question answered.",
+            "headers": {
+              "X-Llav-Seconds": {
+                "description": "Engine time.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Llav-Shared-State-Tokens": {
+                "description": "Prefix tokens shared by the questions, or 0.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Llav-State-Cache": {
+                "description": "Whether the state came from llav's state cache.",
+                "schema": {
+                  "enum": [
+                    "hit",
+                    "miss",
+                    "off"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Content-Length is not a nonnegative integer."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing or invalid API key."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The body was sent with Transfer-Encoding; send it with Content-Length."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The body exceeds the server's limit."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Validation failed; detail lists the field paths."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The llama-server backend failed, or llav hit an internal error."
+          },
+          "529": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "All slots were busy; retry with backoff."
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Answer typed questions about one state"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ]
+}

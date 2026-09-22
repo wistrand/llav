@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from llav.cli import main  # noqa: E402
 from llav.engine import ContextTooLong, Engine, EngineError, LlamaClient  # noqa: E402
+from llav.openapi import document  # noqa: E402
 from llav.prompt import LABELS, SYSTEM, messages  # noqa: E402
 from llav.questions import ValidationError, build_answer, confidence, parse_request  # noqa: E402
 from llav.runtime import LlamaProcess  # noqa: E402
@@ -349,6 +350,36 @@ class FakeEngine:
         return [[0.75, 0.25] for _ in questions], {"input_tokens": 1, "output_tokens": 0}, {
             "seconds": 0.0, "shared_state_tokens": 0, "state_cache": "off",
         }
+
+
+class OpenApiTest(unittest.TestCase):
+    def test_committed_file_matches_the_code(self):
+        committed = json.loads((Path(__file__).resolve().parent.parent / "openapi.json").read_text())
+        self.assertEqual(committed, document(), "openapi.json is stale; run scripts/write-openapi.py")
+
+    def test_every_documented_path_is_served(self):
+        spec = document()
+        server = ServerTest("run")
+        port = server.serve()
+        for path, operations in spec["paths"].items():
+            with self.subTest(path=path):
+                method = "post" if "post" in operations else "get"
+                head = (f"{method.upper()} {path} HTTP/1.1\nHost: x\nConnection: close\n"
+                        + (f"Content-Length: {len(ServerTest.BODY)}\nContent-Type: application/json\n"
+                           if method == "post" else ""))
+                status, _, _ = server.exchange(port, head, ServerTest.BODY if method == "post" else b"")
+                self.assertNotEqual(status, 404, f"{method.upper()} {path} is documented but not routed")
+                self.assertIn(str(status), operations[method]["responses"])
+
+    def test_served_document_names_the_models_the_server_accepts(self):
+        server = ServerTest("run")
+        port = server.serve()
+        status, _, body = server.exchange(port, "GET /openapi.json HTTP/1.1\nHost: x\nConnection: close\n")
+        self.assertEqual(status, 200)
+        served = json.loads(body)
+        self.assertEqual(served["paths"].keys(), document()["paths"].keys())
+        self.assertEqual(served["components"]["schemas"]["Request"]["properties"]["model"]["enum"],
+                         ["llav-test", "llav-latest"])
 
 
 class ServerTest(unittest.TestCase):

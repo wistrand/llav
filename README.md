@@ -165,6 +165,12 @@ A 400, 401, 404, 411 or 413 response to a `POST` is sent before the body is read
 
 Returns the served model id, its aliases and the backend details.
 
+### `GET /openapi.json`
+
+The OpenAPI 3.1 document for this server, built from the code that serves it, so the model ids it lists are
+the ones this process accepts. No key is needed. A committed copy sits in
+[openapi.json](openapi.json); `scripts/write-openapi.py` regenerates it.
+
 ### `GET /health`
 
 Returns `{"status": "ok"}` while the managed llama-server is running.

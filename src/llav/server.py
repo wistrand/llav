@@ -1,4 +1,4 @@
-"""HTTP front end: POST /v1/systemone, GET /v1/models, GET /health."""
+"""HTTP front end: POST /v1/systemone, GET /v1/models, GET /health, GET /openapi.json."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import traceback
 from urllib.parse import urlsplit
 
 from .engine import ContextTooLong, Engine, EngineError, Overloaded
+from .openapi import document
 from .questions import ValidationError, build_answer, parse_request
 
 MAX_BODY = 8 * 1024 * 1024
@@ -106,6 +107,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/health":
             ok = self.app.health()
             self._send(200 if ok else 503, {"status": "ok" if ok else "unavailable"})
+        elif path == "/openapi.json":
+            # Served unauthenticated: it describes the API, including that a key may be required.
+            self._send(200, document(self.app.model_id, tuple(self.app.aliases)))
         elif path == "/v1/models":
             if self._authorized():
                 self._send(200, {"object": "list", "data": [{

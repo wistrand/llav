@@ -18,19 +18,21 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 
 ## Layout
 
-| Path                     | Role                                                                   |
-|--------------------------|------------------------------------------------------------------------|
-| `src/llav/cli.py`        | Entry point `main()`: flags, managed vs external llama-server, cleanup |
-| `src/llav/server.py`     | `Handler`: routes, auth, body limits, error-to-status mapping          |
-| `src/llav/questions.py`  | `parse_request()`, `Question`, `build_answer()`, `confidence()`        |
-| `src/llav/prompt.py`     | `messages()`: SemIf `direct-options-v1` prompt; `LABELS`               |
-| `src/llav/engine.py`     | `LlamaClient`, `Engine.evaluate()`: tokenization, slots, readout       |
-| `src/llav/runtime.py`    | `LlamaProcess`: start, health-wait, stop llama-server                  |
-| `src/llav/webui.html`    | Optional browser UI (`--web-ui`); self-contained, no external requests |
-| `tests/test_llav.py`     | Unit tests with a fake llama-server; no model needed                   |
-| `scripts/fetch-model.sh` | Downloads a pinned Q8_0 GGUF (Qwen3.5-4B default) and checks SHA-256   |
-| `agent_docs/`            | Deep dives, linked below                                               |
-| `docs/`                  | README screenshots; retake them when the web UI changes                |
+| Path                       | Role                                                                   |
+|----------------------------|------------------------------------------------------------------------|
+| `src/llav/cli.py`          | Entry point `main()`: flags, managed vs external llama-server, cleanup |
+| `src/llav/server.py`       | `Handler`: routes, auth, body limits, error-to-status mapping          |
+| `src/llav/questions.py`    | `parse_request()`, `Question`, `build_answer()`, `confidence()`        |
+| `src/llav/prompt.py`       | `messages()`: SemIf `direct-options-v1` prompt; `LABELS`               |
+| `src/llav/engine.py`       | `LlamaClient`, `Engine.evaluate()`: tokenization, slots, readout       |
+| `src/llav/runtime.py`      | `LlamaProcess`: start, health-wait, stop llama-server                  |
+| `src/llav/webui.html`      | Optional browser UI (`--web-ui`); self-contained, no external requests |
+| `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
+| `tests/test_llav.py`       | Unit tests with a fake llama-server; no model needed                   |
+| `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
+| `scripts/fetch-model.sh`   | Downloads a pinned Q8_0 GGUF (Qwen3.5-4B default) and checks SHA-256   |
+| `agent_docs/`              | Deep dives, linked below                                               |
+| `docs/`                    | README screenshots; retake them when the web UI changes                |
 
 ## Commands
 
@@ -89,6 +91,8 @@ Quick start lists install options per platform.
 - Map new failure modes to the existing statuses in `server.py`: 422 for caller mistakes, 529 for
   capacity, 500 for backend faults.
 - The README's Options block is hand-written. When flags change in `cli.py`, update it in the same change.
+- The API is described once, in `openapi.py`. When routes, question types, limits or statuses change, update
+  it and run `PYTHONPATH=src python3 scripts/write-openapi.py`; a test fails while `openapi.json` is stale.
 
 ## Documentation Style
 
