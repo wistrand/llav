@@ -141,11 +141,29 @@ from Tuesday to Thursday, then pushed back one more day"). Same day, same laptop
 | Granite 4.2 3B     | 13/17 | pronoun (1.00), meeting day (0.94), apple count (0.55), "still a problem?" (0.11) |
 | SmolLM3-3B         | 10/17 | seven, including two plain negations at 0.80 and 0.89                             |
 
-- Only Qwen3.5-4B handled the multi-step items; every other model missed the meeting day.
+- Only Qwen3.5-4B handled the multi-step items; every other pinned model missed the meeting day.
 - How a model is wrong matters as much as how often. Qwen3.5-2B's misses sit near 0.5, so its probabilities
   flag its uncertainty. The Granites miss at 0.94 to 1.00, which no threshold can catch.
 - SmolLM3 misreads negation ("not a single tester reported a crash"), which puts it below its easy-set
   score.
+
+**Larger mixture-of-experts models.** Two models with about 3B active parameters were run through the same
+easy, hard, order and timing checks, Q8_0, after stopping every other llama-server:
+
+| Model                            | Total / active | Q8_0    | Easy  | Hard  | Flips | Letter mass | 10 q, long state |
+|----------------------------------|---------------:|--------:|------:|------:|------:|------------:|-----------------:|
+| Qwen3.5-4B (reference)           |      4B dense  |  4.6 GB | 19/19 | 17/17 |  0/11 |        1.00 |           4.56 s |
+| Qwen3.6-35B-A3B                  |      36B / 3B  | 36.9 GB | 19/19 | 17/17 |  0/11 |        1.00 |          10.44 s |
+| Nemotron 3.5 Lightning 30B-A3B   |      32B / 3B  | 33.6 GB | 19/19 | 16/17 |  0/11 |  0.94–0.98  |          16.50 s |
+
+- Neither beat Qwen3.5-4B here, because Qwen3.5-4B already answers every question right; these checks
+  cannot show what a larger model adds. That needs harder labelled data.
+- Active parameters do not set the speed on this iGPU: at 3B active, both were 2.3x and 3.6x slower than the
+  4B dense model. Granite 4.0 H Tiny (about 1B active) showed the same, matching the dense 4B.
+- Nemotron leaks 2 to 6% of its probability to tokens like `The` and `Yes`, and picked technical (0.93) for
+  the README's failing-payouts example.
+- Neither is pinned in `scripts/fetch-model.sh`. Qwen3.6-35B-A3B is the candidate for a quality option on a
+  machine with a large GPU; unmeasured there.
 
 Ranking of the pinned models as candidates for the default, revised 2026-09-22 after the harder questions.
 Qwen3.5-4B stays the default; switching needs an accuracy run comparable to its `shape777` result, not this
