@@ -80,6 +80,24 @@ The readout cost is nearly fixed: 124 ms on an 83-token state, 137 ms at 1,049, 
 120 ms per question is llama.cpp's small-batch overhead, not context. `n_probs` 16 against 128 changes
 nothing.
 
+Measured again on a second machine, 2026-09-22: a MacBook Air M3 (10-core GPU, 24 GB, macOS, Metal,
+llama.cpp build 10964, Python 3.14), same Qwen3.5-4B Q8_0 and the same scripts. The 39 unit tests pass
+there too.
+
+| Phase, 10 questions on a 1,793-token state | Arc B390 iGPU | MacBook Air M3 |
+|---------------------------------------------|--------------:|---------------:|
+| Erase, prime and save the state              |        2.80 s |         5.35 s |
+| Readout per question                         |        157 ms |         203 ms |
+| Restore per question                         |         20 ms |          12 ms |
+| llav's own work, per question                |          7 ms |           3 ms |
+| First request, 10 questions                  |        4.98 s |         7.55 s |
+| Repeat request, 5 questions                  |        0.88 s |         1.09 s |
+| Repeat request, 1 question                   |        0.18 s |         0.22 s |
+
+The M3 answers identically (19/19 easy, 17/17 hard, no order flips, probabilities within 0.01) and is about
+1.5 to 1.9 times slower than the Arc iGPU on prefill. Apple's base chips are therefore not a speed upgrade
+here; the Pro and Max parts have several times the GPU cores and are the ones the README extrapolates to.
+
 Tried and rejected, same workload:
 - **llama-server flags.** Flash attention is already on (`-fa auto`); forcing it off costs 30% (6.01 s
   against 4.65 s). `-ub 1024 -b 2048` is slower (5.47 s), and with `-fa on` slower still (5.99 s).

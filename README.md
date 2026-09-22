@@ -292,8 +292,9 @@ questions across requests costs no more than asking them together.
 
 ### Expected scaling on other hardware
 
-**These are estimates, not measurements.** They extrapolate from the laptop figures above; llav has not
-been run on any of this hardware.
+**Only the rows marked measured are measurements.** The rest extrapolate from them; llav has not been run
+on that hardware. The Apple estimates now scale from the measured M3 by GPU core count, so they moved down
+from an earlier guess.
 
 A request has two parts that scale differently:
 - **Evaluating the state** is a large batch of tokens, limited by GPU compute. It speeds up roughly in line
@@ -306,12 +307,15 @@ A request has two parts that scale differently:
 So the number of questions, not the length of the state, sets the time on a large GPU, and it is all that
 is left once the state is cached.
 
-Estimated, 21 questions on a 1,800-token state, first request and a repeat of the same state:
+Estimated, 21 questions on a 1,800-token state, first request and a repeat of the same state. The two
+measured rows carry their measured phase timings out to 21 questions; the Performance table above has the
+runs themselves.
 
 | Hardware                     |      State | Per question | First request | Repeat request | Decisions/s, repeat |
 |------------------------------|-----------:|-------------:|--------------:|---------------:|--------------------:|
-| Arc B390 iGPU (measured)     |  2.5–3.4 s |   0.2–0.25 s |         7.0 s |          3.4 s |                   6 |
-| Apple M4 Pro/Max (Metal)     |  0.8–1.5 s |    50–100 ms |       2–3.5 s |      1.1–2.1 s |               10–19 |
+| Arc B390 iGPU (measured)     |  2.5–3.4 s |   0.2–0.25 s |         6.5 s |          3.7 s |                   6 |
+| MacBook Air M3 (measured)    |     5.35 s |       203 ms |        10.0 s |          4.5 s |                   5 |
+| Apple M4 Pro/Max (Metal)     |  1.3–2.1 s |    80–150 ms |     3.5–5.3 s |      1.7–3.2 s |                7–12 |
 | RTX 4070 / 3090 class (CUDA) |  0.2–0.4 s |     30–50 ms |     0.8–1.4 s |      0.7–1.1 s |               19–30 |
 | RTX 4090 / 5090 (CUDA)       | 0.1–0.25 s |     20–35 ms |     0.5–1.0 s |      0.5–0.8 s |               26–46 |
 | H100                         |     ~0.1 s |     20–30 ms |     0.5–0.7 s |      0.5–0.7 s |               32–46 |
