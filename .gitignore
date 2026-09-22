@@ -1,0 +1,9 @@
+__pycache__/
+*.egg-info/
+build/
+dist/
+*.gguf
+*.py[cod]
+.venv/
+venv/
+.claude/
