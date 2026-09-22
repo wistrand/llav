@@ -57,7 +57,8 @@ probabilities of the answer labels straight from the logits. Nothing is generate
    | [SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)                 | `smollm3-3b`        | 3.3 GB |
 
    The agreement figures under How it works were measured with Qwen3.5-4B only. The other two pass llav's
-   startup checks and answer sensibly, but their accuracy is unmeasured; see
+   startup checks and answer sensibly, but their accuracy is unmeasured. Models of 1B parameters and under
+   (Granite 4.0 1B and 350M, Gemma 3 1B, Llama 3.2 1B) were tried and fail at this readout; see
    [agent_docs/research.md](agent_docs/research.md).
 
 3. Serve from the checkout. Nothing needs installing:

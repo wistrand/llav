@@ -87,6 +87,35 @@ better answer for failing payouts. That points to worse calibration than Qwen's,
 Neither model's accuracy against labelled data has been measured, and neither has been timed on a long
 state.
 
+### Models under 3B
+
+Checked on 2026-09-22 with a scratch eval against each model, one at a time on the same laptop: 19
+clear-cut questions with known answers (nouls and choices over sentiment, language, topic and department),
+the same 11 choice questions with their options reversed, and a 10-question request on a 1,800-token state.
+The script was not kept; the numbers below are the record.
+
+| Model             | Correct | Flips when reversed | Letter mass | 10 q, long state |
+|-------------------|--------:|--------------------:|------------:|-----------------:|
+| Qwen3.5-4B        |   19/19 |                0/11 |        1.00 |           4.76 s |
+| Granite 4.0 Micro |   18/19 |                1/11 |        1.00 |           5.84 s |
+| SmolLM3-3B        |   17/19 |                0/11 |        1.00 |           5.01 s |
+| Granite 4.0 1B    |    6/19 |               11/11 |  0.00–0.01  |           3.95 s |
+| Gemma 3 1B        |   13/19 |                9/11 |  0.99–1.00  |           7.21 s |
+| Llama 3.2 1B      |    8/19 |                9/11 |  0.98–0.99  |           1.95 s |
+| Granite 4.0 350M  |    6/19 |               10/11 |  0.99–1.00  |           1.54 s |
+
+None of the four small models is usable with this readout:
+- Granite 4.0 1B's next token is `**` (markdown bold) with over 78% probability, so the letters get almost
+  no mass and the softmax over them is noise.
+- Gemma 3 1B answers `B` almost regardless of the question; Llama 3.2 1B and Granite 4.0 350M lean on `A`.
+  Reversing the options flips most of their choices, which is position bias, not a judgement.
+- Their speed gain on this laptop is small: at most about 3x on the long state, because per-question
+  overhead dominates (see the README's scaling notes). Gemma 3 1B was slower than Qwen3.5-4B here; the
+  cause was not investigated.
+
+They were removed from `scripts/fetch-model.sh`. A few-shot prompt or a fine-tuned readout might rescue them,
+but either changes the prompt format and needs its own validation.
+
 ## Rejected approaches
 
 - **Context checkpoints for prefix reuse.** Debug logs showed llama-server saving two 50 MB checkpoints per
