@@ -65,7 +65,7 @@ SYCL gained about 3% end to end on serial-restored, but needs the oneAPI toolkit
 
 ## Other models
 
-`scripts/fetch-model.sh` also pins IBM Granite 4.0 Micro and SmolLM3-3B (Q8_0). Checked on 2026-09-22 with
+IBM Granite 4.0 Micro and SmolLM3-3B (Q8_0) were the first alternatives tried. Checked on 2026-09-22 with
 the four-question support-ticket request from the README plus one yes/no question ("Is the customer
 praising the product?"), nothing more:
 
@@ -87,34 +87,63 @@ better answer for failing payouts. That points to worse calibration than Qwen's,
 Neither model's accuracy against labelled data has been measured, and neither has been timed on a long
 state.
 
-### Models under 3B
+### Model screening
 
 Checked on 2026-09-22 with a scratch eval against each model, one at a time on the same laptop: 19
 clear-cut questions with known answers (nouls and choices over sentiment, language, topic and department),
 the same 11 choice questions with their options reversed, and a 10-question request on a 1,800-token state.
-The script was not kept; the numbers below are the record.
+All Q8_0. The script was not kept; the numbers below are the record. Nineteen easy questions separate
+broken models from working ones; they do not rank the working ones.
 
-| Model             | Correct | Flips when reversed | Letter mass | 10 q, long state |
-|-------------------|--------:|--------------------:|------------:|-----------------:|
-| Qwen3.5-4B        |   19/19 |                0/11 |        1.00 |           4.76 s |
-| Granite 4.0 Micro |   18/19 |                1/11 |        1.00 |           5.84 s |
-| SmolLM3-3B        |   17/19 |                0/11 |        1.00 |           5.01 s |
-| Granite 4.0 1B    |    6/19 |               11/11 |  0.00–0.01  |           3.95 s |
-| Gemma 3 1B        |   13/19 |                9/11 |  0.99–1.00  |           7.21 s |
-| Llama 3.2 1B      |    8/19 |                9/11 |  0.98–0.99  |           1.95 s |
-| Granite 4.0 350M  |    6/19 |               10/11 |  0.99–1.00  |           1.54 s |
+| Model              | Released | Correct | Flips when reversed | Letter mass | 10 q, long state |
+|--------------------|----------|--------:|--------------------:|------------:|-----------------:|
+| Qwen3.5-4B         | 2026-02  |   19/19 |                0/11 |        1.00 |           4.76 s |
+| Qwen3.5-2B         | 2026-02  |   18/19 |                1/11 |        1.00 |           2.24 s |
+| Granite 4.2 3B     | 2026-08  |   18/19 |                0/11 |        1.00 |           4.90 s |
+| Granite 4.0 H Tiny | 2025-10  |   18/19 |                1/11 |        1.00 |           4.64 s |
+| Granite 4.0 Micro  | 2025-10  |   18/19 |                1/11 |        1.00 |           5.84 s |
+| Ministral 3 3B     | 2025-12  |   18/19 |                0/11 |  0.99–1.00  |           5.71 s |
+| Phi-4-mini         | 2025-02  |   17/19 |                0/11 |  0.99–1.00  |           5.34 s |
+| SmolLM3-3B         | 2025-07  |   17/19 |                0/11 |        1.00 |           5.01 s |
+| Gemma 4 E2B        | 2026-03  |   17/19 |                0/11 |        1.00 |          21.67 s |
+| Gemma 3 4B         | 2025-03  |    9/19 |                7/11 |        1.00 |          31.58 s |
+| Gemma 3 1B         | 2025-03  |   13/19 |                9/11 |  0.99–1.00  |           7.21 s |
+| Llama 3.2 1B       | 2024-09  |    8/19 |                9/11 |  0.98–0.99  |           1.95 s |
+| Granite 4.0 1B     | 2025-10  |    6/19 |               11/11 |  0.00–0.01  |           3.95 s |
+| Granite 4.0 350M   | 2025-10  |    6/19 |               10/11 |  0.99–1.00  |           1.54 s |
+| LFM2.5-2.6B        | 2026-07  |    6/19 |               11/11 |        0.00 |           3.13 s |
 
-None of the four small models is usable with this readout:
-- Granite 4.0 1B's next token is `**` (markdown bold) with over 78% probability, so the letters get almost
-  no mass and the softmax over them is noise.
-- Gemma 3 1B answers `B` almost regardless of the question; Llama 3.2 1B and Granite 4.0 350M lean on `A`.
-  Reversing the options flips most of their choices, which is position bias, not a judgement.
-- Their speed gain on this laptop is small: at most about 3x on the long state, because per-question
-  overhead dominates (see the README's scaling notes). Gemma 3 1B was slower than Qwen3.5-4B here; the
-  cause was not investigated.
+Findings:
+- **Working models are all about 3B and up**, except Qwen3.5-2B, which is also the only one clearly faster
+  than Qwen3.5-4B (about 2x on the long state). Its department answer on the README example was a near-tie
+  (billing 0.53, technical 0.46).
+- **Granite 4.2 3B and Granite 4.0 Micro put essentially all probability on one option** for every
+  question, and reversing the options did not move Granite 4.2 at all. Stable, but the probabilities carry
+  little information beyond the argmax. Worse calibration than Qwen's is likely; unmeasured.
+- **Gemma models are slow with llav**: Gemma 4 E2B was accurate but 4.5x slower than Qwen3.5-4B on the long
+  state, Gemma 3 4B 6.6x. Both use sliding-window attention; an interaction with slot save and restore is
+  the suspected cause, not confirmed. Gemma 3 4B was also biased toward `A`.
+- **Failures come in two kinds.** Granite 4.0 1B (`**`) and LFM2.5-2.6B (`The`, 92–95%) want to start a
+  sentence, so the letters get no mass and the softmax over them is noise. Gemma 3, Llama 3.2 1B and Granite
+  4.0 350M do answer with a letter but by position: reversing the options flips most choices.
+- **The speed gain from small models is capped** by per-question overhead on this laptop (see the README's
+  scaling notes).
 
-They were removed from `scripts/fetch-model.sh`. A few-shot prompt or a fine-tuned readout might rescue them,
-but either changes the prompt format and needs its own validation.
+Ranking of the pinned models as candidates for the default, decided 2026-09-22. Qwen3.5-4B stays the
+default; switching needs an accuracy run comparable to its `shape777` result, not this screening.
+
+| Rank | Model              | Reason                                                                                                                                                                           |
+|-----:|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|    1 | Qwen3.5-4B         | Only validated model; 19/19, no flips; probabilities informative (billing 0.85, technical 0.15)                                                                                  |
+|    2 | Qwen3.5-2B         | Twice as fast, 2.1 GB, same family and template, so the validation likely transfers best; one flip moved a probability by 0.86 and the README department question was a near-tie |
+|    3 | Granite 4.2 3B     | Best non-Chinese; no order bias, but probabilities saturate at 0 or 1                                                                                                            |
+|    4 | Granite 4.0 H Tiny | 18/19 with less saturated probabilities than the other Granites; 7.4 GB and no faster on the laptop                                                                              |
+|    5 | SmolLM3-3B         | 17/19; softer probabilities; the prompt carries today's date (see [gotchas.md](gotchas.md))                                                                                      |
+
+`scripts/fetch-model.sh` pins the default plus Qwen3.5-2B, Granite 4.2 3B, Granite 4.0 H Tiny and SmolLM3-3B.
+Granite 4.0 Micro was dropped: Granite 4.2 3B matched or beat it on every measure. A few-shot prompt or a
+fine-tuned readout might rescue the failing models, but either changes the prompt format and needs its own
+validation.
 
 ## Rejected approaches
 
@@ -135,6 +164,9 @@ but either changes the prompt format and needs its own validation.
   quantization: untested.
 - A native program on libllama (`llama_memory_seq_cp` or `llama_state_seq_*` plus batched `llama_decode`)
   might match torch's batched shared mode. Untested; the Arch `llama-cpp` package ships `llama.h`.
-- Accuracy and throughput of Granite 4.0 Micro and SmolLM3-3B on the `shape777` workload: unmeasured.
+- Accuracy of the alternative models in `scripts/fetch-model.sh` on the `shape777` workload or other labelled
+  data: unmeasured.
+- Why Gemma models are 4 to 7 times slower under llav (sliding-window attention with slot restore is the
+  suspect): not investigated.
 - Throughput on other GPUs (CUDA, Metal): unmeasured. The README's scaling table is an extrapolation from the
   laptop figures; replace it with measurements when available.

@@ -3,8 +3,11 @@
 #   scripts/fetch-model.sh [DIR] [MODEL]    (default: current directory, qwen3.5-4b)
 # MODEL is one of:
 #   qwen3.5-4b          Qwen3.5-4B, the default; the validation in agent_docs/research.md used it
-#   granite-4.0-micro   IBM Granite 4.0 Micro (3B), Apache 2.0
+#   qwen3.5-2b          Qwen3.5-2B, Apache 2.0; about twice as fast as the default on a long state
+#   granite-4.2-3b      IBM Granite 4.2 3B, Apache 2.0
+#   granite-4.0-h-tiny  IBM Granite 4.0 H Tiny (7B MoE, about 1B active), Apache 2.0
 #   smollm3-3b          Hugging Face SmolLM3-3B, Apache 2.0
+# Only the default is validated; agent_docs/research.md has the screening results for the others.
 set -euo pipefail
 
 dir="${1:-.}"
@@ -17,11 +20,23 @@ case "$model" in
     file=Qwen_Qwen3.5-4B-Q8_0.gguf
     sha256=5c74c0ede371924357dff0cb6ba145bd67208b9b2389ded681adfff3f7608db7
     ;;
-  granite-4.0-micro)
-    repo=ibm-granite/granite-4.0-micro-GGUF
-    revision=ec48475f0c811d812fbfb61975717a9c36eeb652
-    file=granite-4.0-micro-Q8_0.gguf
-    sha256=a023da9d89a7f3c5369ac1acfe8fa57277eaec591e1b23dde0cd8b01e0bd3fd6
+  qwen3.5-2b)
+    repo=bartowski/Qwen_Qwen3.5-2B-GGUF
+    revision=7d26695454df6de5fbcce2e58681e62dae06ce43
+    file=Qwen_Qwen3.5-2B-Q8_0.gguf
+    sha256=be647507ce6cde229b838924d47bfff9763171105563f7f908670dae57c4dbe2
+    ;;
+  granite-4.2-3b)
+    repo=ibm-granite/granite-4.2-3b-GGUF
+    revision=c40945d71cd90f249a56985e8155551a9188dc30
+    file=granite-4.2-3b-Q8_0.gguf
+    sha256=fbe986738041418e26de9e123ba740cb654931f85bf572a71bd01f9e6b85e53d
+    ;;
+  granite-4.0-h-tiny)
+    repo=ibm-granite/granite-4.0-h-tiny-GGUF
+    revision=08d5a8a9741dd5c1a95d2d39e25253226aa1464e
+    file=granite-4.0-h-tiny-Q8_0.gguf
+    sha256=6d89e0698c7e88ebe26efcf59aa22786bf36b729705edbd76c6b118c8df9b297
     ;;
   smollm3-3b)
     repo=ggml-org/SmolLM3-3B-GGUF
@@ -30,7 +45,7 @@ case "$model" in
     sha256=8aa8cc74656137174a1988d993b00828e65a86fd68773412b632a75aa1373248
     ;;
   *)
-    echo "Unknown model '$model'; choose qwen3.5-4b, granite-4.0-micro or smollm3-3b" >&2
+    echo "Unknown model '$model'; choose qwen3.5-4b, qwen3.5-2b, granite-4.2-3b, granite-4.0-h-tiny or smollm3-3b" >&2
     exit 2
     ;;
 esac
