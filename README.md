@@ -54,6 +54,10 @@ probabilities of the answer labels straight from the logits. Nothing is generate
    PYTHONPATH=src python3 -m llav --gguf ~/models/Qwen_Qwen3.5-4B-Q8_0.gguf --port 8080
    ```
 
+   Add `--web-ui` and open http://localhost:8080/ to try questions in a browser.
+
+   <a href="docs/webui.png"><img src="docs/webui-thumb.png" width="480" alt="The llav web UI answering a rating and a choice question about a support ticket"></a>
+
    For a `llav` command on your `PATH`, for example to run it as a service, use `pipx install .`.
 
 4. Ask:

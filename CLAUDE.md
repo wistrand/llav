@@ -30,6 +30,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `tests/test_llav.py`     | Unit tests with a fake llama-server; no model needed                   |
 | `scripts/fetch-model.sh` | Downloads the pinned Qwen3.5-4B Q8_0 GGUF and checks its SHA-256       |
 | `agent_docs/`            | Deep dives, linked below                                               |
+| `docs/`                  | README screenshots; retake them when the web UI changes                |
 
 ## Commands
 
