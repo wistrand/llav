@@ -30,7 +30,9 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
 | `tests/test_llav.py`       | Unit tests with a fake llama-server; no model needed                   |
 | `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
+| `scripts/benchmark.py`     | `accuracy`, `timing`, `phases` against a running llav                  |
 | `scripts/fetch-model.sh`   | Downloads a pinned Q8_0 GGUF (Qwen3.5-4B default) and checks SHA-256   |
+| `scripts/remote-gpu.sh`    | Sets up and starts llav on a rented CUDA box over SSH (Vast.ai etc.)   |
 | `agent_docs/`              | Deep dives, linked below                                               |
 | `docs/`                    | README screenshots; retake them when the web UI changes                |
 
@@ -41,6 +43,7 @@ PYTHONPATH=src python3 -m llav --gguf PATH.gguf          # serve (starts llama-s
 PYTHONPATH=src python3 -m llav --help                    # flags; the source of truth for options
 python3 -m unittest discover -s tests                    # unit tests
 scripts/fetch-model.sh DIR [MODEL]                       # get a pinned model (default qwen3.5-4b)
+scripts/benchmark.py timing http://127.0.0.1:8080        # also: accuracy, phases (see its --help)
 ```
 
 Runtime requirement: `llama-server` from llama.cpp on `PATH`, or passed with `--llama-server`. The README's

@@ -66,8 +66,9 @@ SYCL gained about 3% end to end on serial-restored, but needs the oneAPI toolkit
 
 ## Where a request's time goes
 
-Measured 2026-09-22 on the laptop above, Qwen3.5-4B, 10 questions on a 1,793-token state, before the state
-cache existed:
+Measured 2026-09-22 with `scripts/benchmark.py phases` on the laptop above, Qwen3.5-4B, 10 questions on a
+1,793-token state, before the state cache and the trim probe existed. Every request paid for the state; the machine comparison below is with
+both in place.
 
 | Phase                                | Time   | Share |
 |--------------------------------------|-------:|------:|
@@ -80,23 +81,39 @@ The readout cost is nearly fixed: 124 ms on an 83-token state, 137 ms at 1,049, 
 120 ms per question is llama.cpp's small-batch overhead, not context. `n_probs` 16 against 128 changes
 nothing.
 
-Measured again on a second machine, 2026-09-22: a MacBook Air M3 (10-core GPU, 24 GB, macOS, Metal,
-llama.cpp build 10964, Python 3.14), same Qwen3.5-4B Q8_0 and the same scripts. The 39 unit tests pass
-there too.
+Measured on two more machines, 2026-09-22, same Qwen3.5-4B Q8_0 and the same scripts: a MacBook Air M3
+(10-core GPU, 24 GB, Metal, llama.cpp build 10964, Python 3.14) and a vast.ai RTX 3090 (24 GB, CUDA,
+Python 3.12). The 39 unit tests pass on both.
 
-| Phase, 10 questions on a 1,793-token state | Arc B390 iGPU | MacBook Air M3 |
-|---------------------------------------------|--------------:|---------------:|
-| Erase, prime and save the state              |        2.80 s |         5.35 s |
-| Readout per question                         |        157 ms |         203 ms |
-| Restore per question                         |         20 ms |          12 ms |
-| llav's own work, per question                |          7 ms |           3 ms |
-| First request, 10 questions                  |        4.98 s |         7.55 s |
-| Repeat request, 5 questions                  |        0.88 s |         1.09 s |
-| Repeat request, 1 question                   |        0.18 s |         0.22 s |
+| Phase, 10 questions on a 1,800-token state | Arc B390 iGPU | MacBook Air M3 | RTX 3090 |
+|---------------------------------------------|--------------:|---------------:|---------:|
+| Erase, prime and save the state              |        2.80 s |         5.35 s |   0.35 s |
+| Readout per question                         |        157 ms |         203 ms |    26 ms |
+| Restore per question                         |         20 ms |          12 ms |    33 ms |
+| llav's own work, per question                |          7 ms |           3 ms |    24 ms |
+| First request, 10 questions                  |        4.98 s |         7.55 s |   0.92 s |
+| Repeat request, 5 questions                  |        0.88 s |         1.09 s |   0.44 s |
+| Repeat request, 1 question                   |        0.18 s |         0.22 s |   0.12 s |
 
-The M3 answers identically (19/19 easy, 17/17 hard, no order flips, probabilities within 0.01) and is about
-1.5 to 1.9 times slower than the Arc iGPU on prefill. Apple's base chips are therefore not a speed upgrade
-here; the Pro and Max parts have several times the GPU cores and are the ones the README extrapolates to.
+All three answer identically: 19/19 easy, 17/17 hard, no order flips, probabilities within 0.02.
+
+- **The M3 is 1.5 to 1.9 times slower than the Arc iGPU** on prefill. Apple's base chips are not a speed
+  upgrade here; the Pro and Max parts have several times the GPU cores and are what the README's estimates
+  extrapolate to.
+- **On the 3090 the slot restore costs more than the answer**, 33 ms against 26 ms, and it does not shrink
+  with the GPU: it is the upload of a 107 MB saved state, not disk. Putting the slot directory on a RAM disk
+  (`TMPDIR=/dev/shm`) changed nothing, 36 ms.
+- **So the trim path is worth much more on a fast GPU than on the laptop.** Granite 4.2 3B restores
+  nothing, which makes it the faster model for a first request on both machines once the trim path exists:
+  0.52 s against Qwen's 0.92 s on the 3090, and 4.52 s against 4.98 s on the laptop, for 10 questions. On
+  repeats the machines disagree: 0.31 s against 0.44 s on the 3090, but 0.98 s against 0.88 s on the
+  laptop, where Qwen's faster readout outweighs its restore. The faster the GPU, the more a model that
+  passes the probe is worth, which the pinned-model ranking does not capture.
+- **llav's own per-question work is hardware-dependent too**: 24 ms on the vast.ai host against 7 ms on the
+  laptop, from slower per-core CPU. It is 1% of a laptop request but 25% of a 3090 one, so the template and
+  tokenize round trips are worth removing if llav is ever tuned for fast GPUs.
+- **A saved state is about 107 MB for this model**, so `--state-cache 4` can hold roughly 430 MB in the slot
+  directory.
 
 Tried and rejected, same workload:
 - **llama-server flags.** Flash attention is already on (`-fa auto`); forcing it off costs 30% (6.01 s
@@ -111,10 +128,12 @@ Adopted:
   question. Qwen3.5-4B fails the same test: 13.38 s against 1.08 s for five questions, recomputing the whole
   prompt each time, and its logprobs differ by 0.06, so it must keep the file. `Engine` decides with a
   startup probe.
-- **Caching evaluated states across requests.** Same state, 1,800 tokens: five questions 3.89 s cold against
-  0.85 s on a repeat, one question 3.20 s against 0.18 s, probabilities identical. A cold request is
-  unchanged for a restoring backend (3.85 s against 3.91 s with the cache off) and costs a trimming one the
-  0.4 s save it would otherwise skip (3.57 s against 3.18 s).
+- **Caching evaluated states across requests.** Qwen3.5-4B, same 1,800-token state: five questions 3.89 s
+  cold against 0.85 s on a repeat, one question 3.20 s against 0.18 s, probabilities identical. Turning the
+  cache on leaves a cold request unchanged for a restoring backend, which already wrote the file (3.85 s
+  against 3.91 s with `--state-cache 0`, 10 questions on a 1,200-token state), and costs a trimming one the
+  save it would otherwise skip (Granite 4.2 3B, same workload, 3.57 s against 3.18 s). The first repeat
+  pays that back.
 
 Still open: batching every question's suffix into one `llama_decode` over a shared prefix would remove the
 120 ms floor. SemIf's torch shared mode reached 5.6 to 6.7 decisions/s that way against 2.3 to 2.8 here.
@@ -149,8 +168,10 @@ state.
 Checked on 2026-09-22 with a scratch eval against each model, one at a time on the same laptop: 19
 clear-cut questions with known answers (nouls and choices over sentiment, language, topic and department),
 the same 11 choice questions with their options reversed, and a 10-question request on a 1,800-token state.
-All Q8_0. The script was not kept; the numbers below are the record. Nineteen easy questions separate
-broken models from working ones; they do not rank the working ones.
+All Q8_0, and all before the state cache and the trim probe existed, so the times here are higher than the
+ranking table's further down; accuracy is unaffected. `scripts/benchmark.py` runs these checks
+(`accuracy`, `timing`, `phases`); the numbers below predate it but its question sets are the same.
+Nineteen easy questions separate broken models from working ones; they do not rank the working ones.
 
 | Model              | Released | Correct | Flips when reversed | Letter mass | 10 q, long state |
 |--------------------|----------|--------:|--------------------:|------------:|-----------------:|
@@ -234,6 +255,11 @@ accuracy run comparable to its `shape777` result, not this screening.
 |    3 | Granite 4.0 H Tiny | slot-file |   2.30 s |     0.89 s | 18/19 | 14/17 | Best non-Chinese, and fastest of them; wrong at 0.99 to 1.00 when it misses; 7.4 GB  |
 |    4 | Granite 4.2 3B     | trim      |   3.70 s |     0.98 s | 18/19 | 13/17 | No order bias at all, but probabilities saturate at 0 or 1, including on misses      |
 |    5 | SmolLM3-3B         | trim      |   3.02 s |     0.77 s | 17/19 | 10/17 | Misreads negation; the prompt carries today's date (see [gotchas.md](gotchas.md))    |
+
+This ranking weighs accuracy first; on speed alone Granite 4.2 3B now answers a first request faster than
+the default on both machines measured (4.52 s against 4.98 s on the laptop, 0.52 s against 0.92 s on an RTX
+3090, 10 questions), because it needs no slot restore. On repeat requests the default is still ahead on the
+laptop and behind on the 3090.
 
 The optimizations did not reorder anything. They cut every model's repeat cost to between 0.42 s and 0.98 s,
 which narrows the speed argument for a weaker model, and the trim path is worth less than the model's own

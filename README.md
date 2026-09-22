@@ -53,7 +53,8 @@ probabilities of the answer labels straight from the logits. Nothing is generate
    Other pinned models, all Apache 2.0, take the name as a second argument
    (`scripts/fetch-model.sh ~/models qwen3.5-2b`). Times are on the laptop under Performance, 1,800-token
    state: a first request of 10 questions, and 5 questions on a state the cache already holds. Rows are in
-   order of preference; the reasons are in [agent_docs/research.md](agent_docs/research.md).
+   order of preference, which weighs accuracy first, so the fastest row is not the top one; the reasons are
+   in [agent_docs/research.md](agent_docs/research.md).
 
    | Model                                                                           | Argument             |   Size | Cold 10 q | Repeat 5 q |
    |---------------------------------------------------------------------------------|----------------------|-------:|----------:|-----------:|
@@ -229,7 +230,7 @@ as `backend.prefix_reuse`.
 **State cache.** The saved file is kept and reused by later requests about the same state, keyed by the
 state's tokens. A hit restores in about 20 ms instead of evaluating the state again, and those tokens are
 not counted in `usage`. `--state-cache N` sets how many states are kept (default 4, `0` disables); each
-costs a file in the slot directory. Measured on the laptop below, 1,800-token state:
+costs a file in the slot directory, about 107 MB for the default model. Measured on the laptop below, 1,800-token state:
 
 | Request                                  | Cold   | Repeat state |
 |------------------------------------------|-------:|-------------:|
@@ -307,24 +308,29 @@ A request has two parts that scale differently:
 So the number of questions, not the length of the state, sets the time on a large GPU, and it is all that
 is left once the state is cached.
 
-Estimated, 21 questions on a 1,800-token state, first request and a repeat of the same state. The two
-measured rows carry their measured phase timings out to 21 questions; the Performance table above has the
-runs themselves.
+Estimated, 21 questions on a 1,800-token state, first request and a repeat of the same state, with the
+default model. "Readout + restore" splits the per-question cost, because only the readout gets faster with
+the GPU; a model that passes the trim probe drops the restore entirely. The measured rows carry their
+measured phase timings out to 21 questions; the Performance table above has the runs themselves.
 
-| Hardware                     |      State | Per question | First request | Repeat request | Decisions/s, repeat |
-|------------------------------|-----------:|-------------:|--------------:|---------------:|--------------------:|
-| Arc B390 iGPU (measured)     |  2.5–3.4 s |   0.2–0.25 s |         6.5 s |          3.7 s |                   6 |
-| MacBook Air M3 (measured)    |     5.35 s |       203 ms |        10.0 s |          4.5 s |                   5 |
-| Apple M4 Pro/Max (Metal)     |  1.3–2.1 s |    80–150 ms |     3.5–5.3 s |      1.7–3.2 s |                7–12 |
-| RTX 4070 / 3090 class (CUDA) |  0.2–0.4 s |     30–50 ms |     0.8–1.4 s |      0.7–1.1 s |               19–30 |
-| RTX 4090 / 5090 (CUDA)       | 0.1–0.25 s |     20–35 ms |     0.5–1.0 s |      0.5–0.8 s |               26–46 |
-| H100                         |     ~0.1 s |     20–30 ms |     0.5–0.7 s |      0.5–0.7 s |               32–46 |
-| 16-core desktop CPU, no GPU  |    10–20 s |      0.5–1 s |       20–40 s |        10–21 s |                 1–2 |
+| Hardware                    |      State | Readout + restore | First request | Repeat request | Decisions/s, repeat |
+|-----------------------------|-----------:|------------------:|--------------:|---------------:|--------------------:|
+| Arc B390 iGPU (measured)    |  2.5–3.4 s |       157 + 20 ms |         6.5 s |          3.7 s |                   6 |
+| MacBook Air M3 (measured)   |     5.35 s |       203 + 12 ms |        10.0 s |          4.5 s |                   5 |
+| Apple M4 Pro/Max (Metal)    |  1.3–2.1 s |    80–150 + 15 ms |     3.5–5.3 s |      2.0–3.5 s |                6–11 |
+| RTX 3090 (measured)         |     0.35 s |        26 + 33 ms |         1.6 s |          1.2 s |                  17 |
+| RTX 4090 / 5090 (CUDA)      | 0.1–0.25 s |  15–25 + 25–30 ms |     1.0–1.4 s |      0.8–1.2 s |               18–26 |
+| H100                        |     ~0.1 s |  15–20 + 20–30 ms |     0.8–1.2 s |      0.7–1.1 s |               19–30 |
+| 16-core desktop CPU, no GPU |    10–20 s |   0.5–1 s + 50 ms |       20–40 s |        11–22 s |                 1–2 |
 
 - **The largest uncertainty is Qwen3.5's recurrent layers.** llama.cpp's kernels for them are newer and
   less tuned than its attention kernels. The GPU rows could be off by a factor of two.
 - **An H100 gains little over a 4090.** A 4B model is too small to use it; the per-question overhead sets
   the limit, and on a repeat request it is the only cost left.
+- **On a fast GPU the slot restore costs more than the answer** (33 ms against 26 ms on the 3090), because
+  it uploads the saved state, about 107 MB for this model. A model that passes the trim probe skips it
+  entirely, and the gap grows with the GPU: Granite 4.2 3B answered a first 10-question request in 0.52 s
+  against the default's 0.92 s on that 3090, and 4.52 s against 4.98 s on the laptop.
 - **Concurrency across states** with `--slots` may scale better on large GPUs than on the laptop. Untested.
 - **Past about 20 decisions/s, software matters more than hardware.** The per-question floor comes from
   llama.cpp evaluating each question's tokens in its own pass; only a batched decode over a shared prefix
