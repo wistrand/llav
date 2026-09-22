@@ -81,4 +81,5 @@ SYCL gained about 3% end to end on serial-restored, but needs the oneAPI toolkit
   quantization: untested.
 - A native program on libllama (`llama_memory_seq_cp` or `llama_state_seq_*` plus batched `llama_decode`)
   might match torch's batched shared mode. Untested; the Arch `llama-cpp` package ships `llama.h`.
-- Throughput on other GPUs (CUDA, Metal): unmeasured.
+- Throughput on other GPUs (CUDA, Metal): unmeasured. The README's scaling table is an extrapolation from the
+  laptop figures; replace it with measurements when available.

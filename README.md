@@ -193,6 +193,38 @@ on every request. For a request with several questions, llav therefore:
 llama-server runs with `--ctx-checkpoints 0 --slot-save-path <tmp>`, which llav sets when it manages the
 process.
 
+## Why it is faster than prompting for text
+
+The usual way to get a decision from a local model is to send the state and question as a chat prompt, let
+the model write an answer, and parse it. llav avoids three costs of that approach.
+
+- **No generation.** Each question is one forward pass, and the answer is read from the logits of the next
+  token. A text answer needs one sequential decode step per output token, plus whatever reasoning the model
+  writes first. With thinking enabled, Qwen3.5 can write hundreds of tokens before it answers.
+- **The state is read once per request.** Reading the prompt is most of the cost. A 1,800-token state
+  takes 2.5–3.4 s to evaluate, and a question on top of it 0.2–0.25 s. Sending each question as its own
+  prompt re-reads the state every time. llama-server's built-in prompt cache helps less than expected with
+  this model, because its hybrid layers force a checkpoint copy off the GPU on every request (see How it
+  works).
+- **No parsing or retries.** The answer is a probability over the declared options, so there is no
+  malformed output to detect and re-ask, and no grammar to maintain.
+
+Asking all the questions in one text prompt would also read the state once. But the model then writes the
+answers one token at a time, each answer can sway the ones after it, and you get labels without
+probabilities.
+
+Measured on the setup below, for 21 yes/no questions about one state:
+
+| Approach                                               | Decisions/s |
+|--------------------------------------------------------|------------:|
+| A fresh prompt per question, no cache                  |        0.27 |
+| A prompt per question with llama-server's prompt cache |        0.69 |
+| llav (state evaluated once, restored per question)     |     2.3–2.8 |
+
+All three rows use the single-pass readout; none of them generates text. A generate-and-parse baseline was
+not measured, so the no-generation gain comes on top of these numbers but has no figure of its own.
+[agent_docs/research.md](agent_docs/research.md) has the details.
+
 ## Performance
 
 These figures come from a laptop with an Intel Arc B390 iGPU on Vulkan, using Q8_0. Each state is about
@@ -207,6 +239,39 @@ These figures come from a laptop with an Intel Arc B390 iGPU on Vulkan, using Q8
 
 Throughput depends heavily on the GPU. llama.cpp does not batch several sequences of this hybrid model
 efficiently, so extra `--slots` add concurrency but little throughput.
+
+### Expected scaling on other hardware
+
+**These are estimates, not measurements.** They extrapolate from the laptop figures above; llav has not
+been run on any of this hardware.
+
+A request has two parts that scale differently:
+- **Evaluating the state** is a large batch of tokens, limited by GPU compute. It speeds up roughly in line
+  with the GPU.
+- **Each question** is a slot restore, two HTTP round trips to llama-server, and a pass of about 80 tokens.
+  A pass that short is limited by memory bandwidth and per-step overhead, so it improves far less. Expect a
+  floor of roughly 20–40 ms per question even on the fastest cards.
+
+On a large GPU the number of questions, not the length of the state, dominates a request's time.
+
+Estimated, 21 questions on a 1,800-token state:
+
+| Hardware                     |      State | Per question |   Request | Decisions/s |
+|------------------------------|-----------:|-------------:|----------:|------------:|
+| Arc B390 iGPU (measured)     |  2.5–3.4 s |   0.2–0.25 s |     7.0 s |           3 |
+| Apple M4 Pro/Max (Metal)     |  0.8–1.5 s |    50–100 ms |   2–3.5 s |        6–10 |
+| RTX 4070 / 3090 class (CUDA) |  0.2–0.4 s |     30–50 ms | 0.8–1.4 s |       15–25 |
+| RTX 4090 / 5090 (CUDA)       | 0.1–0.25 s |     20–35 ms | 0.5–1.0 s |       20–40 |
+| H100                         |     ~0.1 s |     20–30 ms | 0.5–0.7 s |       30–40 |
+| 16-core desktop CPU, no GPU  |    10–20 s |      0.5–1 s |   20–40 s |       0.5–1 |
+
+- **The largest uncertainty is Qwen3.5's recurrent layers.** llama.cpp's kernels for them are newer and
+  less tuned than its attention kernels. The GPU rows could be off by a factor of two.
+- **An H100 gains little over a 4090.** A 4B model is too small to use it; the per-question overhead sets
+  the limit.
+- **Concurrency across states** with `--slots` may scale better on large GPUs than on the laptop. Untested.
+- **Past about 20 decisions/s, software matters more than hardware.** Fewer round trips per question, or
+  evaluating all of a request's questions in one batched pass, would lower the per-question floor.
 
 ## Differences from Jev
 
