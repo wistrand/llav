@@ -7,6 +7,10 @@
 # (Ubuntu 24.04: the native CUDA architecture flag needs CMake 3.24+, newer than 22.04 ships).
 # llav listens on the box's localhost:8765, since Vast images proxy Jupyter on 8080; the printed SSH tunnel maps
 # it to local port 8080. Passing --port in LLAV_ARGS breaks the startup wait and the tunnel line.
+# TS_AUTHKEY=tskey-... joins the box to your tailnet (userspace networking: Vast containers have no /dev/net/tun)
+# and serves llav at https://<TS_HOSTNAME>.<tailnet>.ts.net, so no SSH tunnel and no public port. Use an
+# ephemeral, pre-approved key; the box keeps it in /root/.llav-ts-authkey to survive a rerun. TS_HOSTNAME
+# defaults to llav-gpu. The node stays in the tailnet until you delete it there, even after the box is gone.
 # NATIVE=1 also builds native/llav-readout and starts llav with it: one batched pass per request instead of
 # one llama-server pass per question, which is worth most on a fast GPU (see native/README.md).
 # LLAMA_BIN=FILE.tgz uploads a prebuilt build/bin instead of compiling, when the box has none yet. Save one from a
@@ -44,7 +48,8 @@ if [[ -n "${LLAMA_BIN:-}" ]]; then
   fi
 fi
 
-"${ssh_cmd[@]}" "MODEL=$(printf %q "$model") LLAV_ARGS=$(printf %q "$llav_args") NATIVE=$(printf %q "${NATIVE:-}") bash -s" <<'EOF'
+"${ssh_cmd[@]}" "MODEL=$(printf %q "$model") LLAV_ARGS=$(printf %q "$llav_args") NATIVE=$(printf %q "${NATIVE:-}") \
+  TS_AUTHKEY=$(printf %q "${TS_AUTHKEY:-}") TS_HOSTNAME=$(printf %q "${TS_HOSTNAME:-llav-gpu}") bash -s" <<'EOF'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -92,6 +97,23 @@ if [[ -n "$NATIVE" ]]; then
   LLAV_ARGS="$LLAV_ARGS --native-readout /root/llav-readout"
 fi
 
+# Tailscale, when asked for: the key is stored so a rerun does not need it again.
+if [[ -n "$TS_AUTHKEY" ]]; then  # not a && chain: under set -e an empty key would end the run here
+  printf %s "$TS_AUTHKEY" > /root/.llav-ts-authkey
+  chmod 600 /root/.llav-ts-authkey
+fi
+if [[ -s /root/.llav-ts-authkey ]]; then
+  command -v tailscaled >/dev/null || curl -fsSL https://tailscale.com/install.sh | sh
+  # Userspace networking: these containers have no TUN device. tailscale serve then proxies to llav.
+  pgrep -x tailscaled >/dev/null || (tailscaled --tun=userspace-networking \
+    --socks5-server=localhost:1055 --state=/var/lib/tailscale/tailscaled.state \
+    > /root/tailscaled.log 2>&1 &)
+  for _ in $(seq 30); do tailscale status >/dev/null 2>&1 && break; sleep 1; done
+  # A bad or expired key must not stop llav from starting; the tunnel still works.
+  tailscale up --authkey "$(cat /root/.llav-ts-authkey)" --hostname "$TS_HOSTNAME" --ssh >/dev/null \
+    || echo "tailscale up failed; continuing without it (see /root/tailscaled.log)" >&2
+fi
+
 gguf="$(/root/llav/scripts/fetch-model.sh /root/models "$MODEL" | sed -n 's/^Model ready: //p')"
 
 tmux kill-session -t llav 2>/dev/null || true
@@ -102,6 +124,11 @@ for _ in $(seq 120); do
   curl -sf -o /dev/null http://127.0.0.1:8765/ && break
   sleep 1
 done
+if [[ -s /root/.llav-ts-authkey ]]; then
+  # --bg survives this shell; https needs MagicDNS and HTTPS certificates enabled in the tailnet.
+  tailscale serve --bg 8765 >/dev/null 2>&1 || echo "tailscale serve failed; see tailscale serve status" >&2
+  echo "tailnet URL: $(tailscale status --json | python3 -c 'import json,sys; print("https://" + json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || echo unknown)"
+fi
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
 tail -n 5 /root/llav.log
 EOF
@@ -109,7 +136,9 @@ EOF
 cat <<MSG
 
 llav is running in tmux session "llav" on $host (log: /root/llav.log).
-Tunnel:  ssh -N -p $port -L 8080:localhost:8765 root@$host   then open http://localhost:8080
+Tunnel:  ssh -N -o ServerAliveInterval=15 -o ServerAliveCountMax=6 -p $port -L 8080:localhost:8765 root@$host
+         then open http://localhost:8080 (the box drops idle sessions after ~30 s without the keepalives;
+         with TS_AUTHKEY the tailnet URL above needs no tunnel at all)
 Attach:  ssh -t -p $port root@$host tmux attach -t llav
 Destroy the instance when done; a stopped instance still bills for storage.
 MSG

@@ -34,7 +34,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
 | `scripts/benchmark.py`     | `accuracy`, `timing`, `phases` against a running llav                  |
 | `scripts/fetch-model.sh`   | Downloads a pinned Q8_0 GGUF (Qwen3.5-4B default) and checks SHA-256   |
-| `scripts/remote-gpu.sh`    | Sets up and starts llav on a rented CUDA box over SSH (Vast.ai etc.)   |
+| `scripts/remote-gpu.sh`    | Starts llav on a rented CUDA box over SSH; NATIVE=1, TS_AUTHKEY=...    |
 | `agent_docs/`              | Deep dives, linked below                                               |
 | `docs/`                    | README screenshots; retake them when the web UI changes                |
 
