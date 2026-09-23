@@ -7,6 +7,8 @@
 # (Ubuntu 24.04: the native CUDA architecture flag needs CMake 3.24+, newer than 22.04 ships).
 # llav listens on the box's localhost:8765, since Vast images proxy Jupyter on 8080; the printed SSH tunnel maps
 # it to local port 8080. Passing --port in LLAV_ARGS breaks the startup wait and the tunnel line.
+# NATIVE=1 also builds native/llav-readout and starts llav with it: one batched pass per request instead of
+# one llama-server pass per question, which is worth most on a fast GPU (see native/README.md).
 # LLAMA_BIN=FILE.tgz uploads a prebuilt build/bin instead of compiling, when the box has none yet. Save one from a
 # finished box with: ssh -p PORT root@HOST 'tar -C /root/llama.cpp/build -czf - bin' > FILE.tgz
 # It runs only on the GPU architectures it was built for (native: the build box's), and must unpack at the same path.
@@ -42,7 +44,7 @@ if [[ -n "${LLAMA_BIN:-}" ]]; then
   fi
 fi
 
-"${ssh_cmd[@]}" "MODEL=$(printf %q "$model") LLAV_ARGS=$(printf %q "$llav_args") bash -s" <<'EOF'
+"${ssh_cmd[@]}" "MODEL=$(printf %q "$model") LLAV_ARGS=$(printf %q "$llav_args") NATIVE=$(printf %q "${NATIVE:-}") bash -s" <<'EOF'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -80,6 +82,14 @@ if ! "$server" --version >/dev/null 2>&1; then
     jobs=$(( (quota + period - 1) / period ))
   fi
   cmake --build /root/llama.cpp/build -j "$jobs" --target llama-server
+fi
+
+if [[ -n "$NATIVE" ]]; then
+  # Built here against this llama.cpp: the helper uses its C API, so both must come from one version.
+  g++ -O2 -std=c++17 -o /root/llav-readout /root/llav/native/llav-readout.cpp \
+    -I/root/llama.cpp/include -I/root/llama.cpp/ggml/include \
+    -L/root/llama.cpp/build/bin -lllama -Wl,-rpath,/root/llama.cpp/build/bin
+  LLAV_ARGS="$LLAV_ARGS --native-readout /root/llav-readout"
 fi
 
 gguf="$(/root/llav/scripts/fetch-model.sh /root/models "$MODEL" | sed -n 's/^Model ready: //p')"

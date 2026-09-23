@@ -1,0 +1,55 @@
+# llav-readout, the optional native fast path
+
+`llav-readout` answers every question of one request in a single forward pass. llama-server evaluates each
+question separately and restores the state in between; this helper keeps the state resident and decodes all
+the question suffixes together. llav uses it only when started with `--native-readout`, and falls back to
+llama-server whenever it is absent or fails.
+
+Worth it on a fast GPU, where the per-question fixed costs dominate. A repeat request of 10 questions went
+from 1.89 s to 1.26 s on an Arc iGPU laptop and from 0.65 s to 0.34 s on an RTX 3090; five questions there
+went from 0.38 s to 0.16 s. See [../agent_docs/research.md](../agent_docs/research.md) for the full numbers.
+
+## Build
+
+The helper needs `llama.h` and `libllama` from the same llama.cpp version llama-server comes from. Every
+install route ships them:
+
+```bash
+# Arch (llama-cpp package), or any system where llama.h is on the default include path
+g++ -O2 -std=c++17 -o llav-readout native/llav-readout.cpp -lllama
+
+# Homebrew
+g++ -O2 -std=c++17 -o llav-readout native/llav-readout.cpp \
+    -I/opt/homebrew/include -L/opt/homebrew/lib -lllama
+
+# A llama.cpp built from source
+g++ -O2 -std=c++17 -o llav-readout native/llav-readout.cpp \
+    -I/path/to/llama.cpp/include -I/path/to/llama.cpp/ggml/include \
+    -L/path/to/llama.cpp/build/bin -lllama -Wl,-rpath,/path/to/llama.cpp/build/bin
+```
+
+## Run
+
+```bash
+PYTHONPATH=src python3 -m llav --gguf MODEL.gguf --native-readout ./llav-readout
+```
+
+On a rented GPU box, `NATIVE=1 scripts/remote-gpu.sh HOST PORT` builds the helper there and starts llav
+with it.
+
+The helper loads the model itself, so it needs `--gguf`, not `--llama-url`, and it holds a second copy of
+the weights in memory alongside llama-server's. `--native-questions N` sets how many questions it takes in
+one pass (default 16); a request with more goes to llama-server. `GET /v1/models` reports
+`backend.prefix_reuse: native` while it is in use.
+
+## Notes
+
+- The helper keeps only the most recent state resident, so `X-Llav-State-Cache` reports a hit when a request
+  repeats the state its predecessor used. llav's slot-file cache serves the llama-server path.
+- Requests are serialized through the one helper process. With `--slots` above 1, llama-server can answer
+  several requests at once and the helper cannot.
+- Probabilities are not bit-identical to the llama-server path: batching changes the arithmetic. Measured
+  differences are 1.3e-5 for an attention model and 0.002 for Qwen3.5, against 0.02 between machines.
+- The helper exits when llav closes its input, so it cannot outlive the server that started it.
+- Rebuild the helper when llama.cpp is upgraded. It uses the C API, so a mismatch is a compile error rather
+  than silent corruption.

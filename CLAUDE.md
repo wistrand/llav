@@ -28,6 +28,8 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `src/llav/runtime.py`      | `LlamaProcess`: start, health-wait, stop llama-server                  |
 | `src/llav/webui.html`      | Optional browser UI (`--web-ui`); self-contained, no external requests |
 | `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
+| `src/llav/native.py`       | `NativeReadout`: the optional helper's process and protocol            |
+| `native/llav-readout.cpp`  | That helper: batched readout against libllama; see native/README.md    |
 | `tests/test_llav.py`       | Unit tests with a fake llama-server; no model needed                   |
 | `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
 | `scripts/benchmark.py`     | `accuracy`, `timing`, `phases` against a running llav                  |
@@ -47,7 +49,7 @@ scripts/benchmark.py timing http://127.0.0.1:8080        # also: accuracy, phase
 ```
 
 Runtime requirement: `llama-server` from llama.cpp on `PATH`, or passed with `--llama-server`. The README's
-Quick start lists install options per platform.
+Quick start lists install options per platform; `native/README.md` covers the optional readout helper.
 
 ## Docs
 
@@ -63,8 +65,9 @@ Quick start lists install options per platform.
 
 ## Invariants
 
-- Never add a third-party Python dependency. llav is standard library only; the only runtime is
-  `llama-server`.
+- Never add a third-party Python dependency. llav is standard library only. The runtime is `llama-server`;
+  the `llav-readout` helper in `native/` is optional, opt-in with `--native-readout`, and every path must
+  still work without it.
 - Never change the prompt format (system text, payload keys and order, JSON serialization, label letters)
   without bumping `PROMPT_VERSION` in `prompt.py` and re-measuring agreement. Given the same descriptions,
   `messages()` must produce SemIf's `direct-options-v1` prompt byte for byte; the validation evidence in
@@ -80,6 +83,8 @@ Quick start lists install options per platform.
 - Never let a cached slot file outlive the state that produced it: files are keyed by the prefix tokens and
   a per-run id, evicted by `--state-cache`, and deleted in `Engine.clear_cache` at shutdown.
 - Always return a slot to `Engine.free` in a `finally`, or the server loses capacity permanently.
+- Never let a native-readout failure fail a request: `Engine` drops the helper and answers through
+  llama-server instead. The HTTP path stays the reference implementation, and the tests cover it.
 - Keep the response body to the public System One shape: `model`, `answers`, `usage` with only
   `input_tokens` and `output_tokens`. Put llav-specific data in `X-Llav-*` headers.
 - Never present llav as Jev or TypeSafe. Responses name llav's own model id, and the README keeps its

@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from llav.cli import main  # noqa: E402
 from llav.engine import ContextTooLong, Engine, EngineError, LlamaClient  # noqa: E402
+from llav.native import NativeError, NativeReadout  # noqa: E402
 from llav.openapi import document  # noqa: E402
 from llav.prompt import LABELS, SYSTEM, messages  # noqa: E402
 from llav.questions import ValidationError, build_answer, confidence, parse_request  # noqa: E402
@@ -350,6 +351,72 @@ class FakeEngine:
         return [[0.75, 0.25] for _ in questions], {"input_tokens": 1, "output_tokens": 0}, {
             "seconds": 0.0, "shared_state_tokens": 0, "state_cache": "off",
         }
+
+
+STUB_HELPER = """#!/usr/bin/env python3
+import struct, sys
+sys.stderr.write("llav-readout ready: stub\\n"); sys.stderr.flush()
+fail = "--fail" in sys.argv
+while True:
+    head = sys.stdin.buffer.read(16)
+    if len(head) != 16:
+        break
+    n_prefix, n_labels, n_suffix = struct.unpack("<3i", head[4:])
+    sys.stdin.buffer.read(4 * (n_prefix + n_labels))
+    total = 0
+    for _ in range(n_suffix):
+        count = struct.unpack("<i", sys.stdin.buffer.read(4))[0]
+        sys.stdin.buffer.read(4 * count)
+        total += count
+    if fail:
+        sys.stdout.buffer.write(b"LLVA" + struct.pack("<2i", 3, 0)); sys.stdout.buffer.flush(); continue
+    # Label 0 gets the highest log-probability, so every answer is the first option.
+    values = [(-0.1 if i % n_labels == 0 else -3.0) for i in range(n_suffix * n_labels)]
+    sys.stdout.buffer.write(b"LLVA" + struct.pack("<2i", 0, total) +
+                            struct.pack("<%df" % len(values), *values))
+    sys.stdout.buffer.flush()
+"""
+
+
+class NativeReadoutTest(unittest.TestCase):
+    def stub(self) -> Path:
+        script = Path(tempfile.mkdtemp()) / "stub.py"
+        script.write_text(STUB_HELPER)
+        script.chmod(0o755)
+        return script
+
+    def helper(self) -> NativeReadout:
+        readout = NativeReadout(str(self.stub()), Path("model.gguf"), [10, 20], 4096, max_questions=4)
+        self.addCleanup(readout.close)
+        return readout
+
+    def test_answers_every_suffix_in_one_call(self):
+        readout = self.helper()
+        logprobs, evaluated = readout.evaluate([1, 2, 3], [[4, 5], [6, 7, 8]])
+        self.assertEqual(len(logprobs), 2)
+        self.assertEqual([len(row) for row in logprobs], [2, 2])
+        self.assertEqual(evaluated, 5)
+        self.assertGreater(logprobs[0][0], logprobs[0][1])
+
+    def test_refuses_more_questions_than_it_was_started_for(self):
+        readout = self.helper()
+        with self.assertRaises(NativeError):
+            readout.evaluate([1], [[2]] * 5)
+
+    def test_engine_falls_back_when_the_helper_fails(self):
+        client = FakeClient()
+        readout = NativeReadout(str(self.stub()), Path("model.gguf"), [10, 20], 4096, max_questions=4)
+        self.addCleanup(readout.close)
+        readout.close()  # a helper that is gone stands in for one that crashes mid-request
+        engine = Engine(client, 1, 100_000, Path(tempfile.mkdtemp()), queue_timeout=1, native=readout)
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "noul", "instructions": "q2"},
+        }))
+        with mock.patch("sys.stderr"):
+            results, _, _ = engine.evaluate({"ticket": "x"}, questions)
+        self.assertEqual(len(results), 2)  # answered by llama-server instead
+        self.assertIsNone(engine.native)
 
 
 class OpenApiTest(unittest.TestCase):

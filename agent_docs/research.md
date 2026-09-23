@@ -104,7 +104,7 @@ measured while a second llav held the GPU; treat single-run phase numbers as app
 requests where possible.
 
 - **The M3 is 1.5 to 1.9 times slower than the Arc iGPU** on prefill. Apple's base chips are not a speed
-  upgrade here; the Pro and Max parts have several times the GPU cores and are what the README's estimates
+  upgrade here; the Pro and Max parts have several times the GPU cores and are what the estimates below
   extrapolate to.
 - **On the 3090 the slot restore costs more than the answer**, 34 ms against 27 ms, and it does not shrink
   with the GPU: it is the upload of a 107 MB saved state, not disk. Putting the slot directory on a RAM disk
@@ -123,6 +123,126 @@ requests where possible.
 - **Writing that file costs wildly different amounts**: 433 ms on the Arc laptop, 59 ms on the 3090, 26 ms on
   the M3, where unified memory spares the copy. It is paid once per state with the cache on, so it matters
   most for states asked about only once.
+
+### The pinned models on a fast GPU
+
+Same scripts on the RTX 3090, 2026-09-23, 1,800-token state:
+
+| Model          | Path      | Cold 10 q | Repeat 10 q | Repeat 1 q |  Easy |  Hard | Restore | Readout | Slot file |
+|----------------|-----------|----------:|------------:|-----------:|------:|------:|--------:|--------:|----------:|
+| Qwen3.5-4B     | slot-file |    1.16 s |      0.65 s |     0.08 s | 19/19 | 17/17 |   31 ms |   26 ms |    106 MB |
+| Qwen3.5-2B     | slot-file |    0.66 s |      0.40 s |     0.05 s | 18/19 | 14/17 |   16 ms |   17 ms |     40 MB |
+| Granite 4.2 3B | trim      |    0.71 s |      0.30 s |     0.08 s | 18/19 | 13/17 |   41 ms |   21 ms |    134 MB |
+
+- Qwen3.5-2B's state is 40 MB against the 4B's 106 MB, so its restore costs half as much. It is the fastest
+  first request of the three and close to Granite on repeats, while keeping the default's family, template
+  and a better hard score. On a fast GPU it, not Granite, is the speed pick.
+- Granite pays a 136 ms save once and then no restores, which is why it leads on repeats.
+- Hard scores move by one between runs (Qwen3.5-2B: 13/17 on the laptop, 14/17 here) because several of its
+  answers sit near 0.5.
+
+### The native readout helper
+
+`native/llav-readout.cpp` keeps the state resident and decodes every question of a request in one
+`llama_decode`, instead of one llama-server pass per question. Measured through llav's own API with
+`--native-readout`, Qwen3.5-4B, 10 questions on an 1,800-token state:
+
+| Machine  | Path         | Cold 10 q | Repeat 10 q | Repeat 5 q | Repeat 1 q |
+|----------|--------------|----------:|------------:|-----------:|-----------:|
+| Arc iGPU | llama-server |    5.11 s |      1.89 s |     0.92 s |     0.18 s |
+| Arc iGPU | native       |    3.78 s |      1.26 s |     0.72 s |     0.19 s |
+| RTX 3090 | llama-server |    1.16 s |      0.65 s |     0.38 s |     0.08 s |
+| RTX 3090 | native       |    0.82 s |      0.34 s |     0.16 s |     0.04 s |
+
+- The gain grows with the GPU, as predicted: 1.5x on the laptop's repeat requests, 1.9x on the 3090's, and
+  2.4x for five questions there, because the fixed costs it removes are a larger share when the compute is
+  fast.
+- With the helper, the default model matches the trim models: 0.34 s against Granite 4.2 3B's 0.30 s on a
+  repeat of 10, while keeping 17/17 on the hard questions. That weakens the case for a faster, weaker model
+  on fast hardware.
+- Answers are unchanged: 19/19 easy, 17/17 hard, no order flips. Probabilities differ from the llama-server
+  path by at most 1.3e-5 for an attention model and 0.002 for Qwen3.5, against 0.02 between machines; the
+  batched arithmetic is not bit-identical.
+- The helper compiled unchanged against the Arch package's `llama.h` and against a from-source CUDA build.
+
+### Against generating text
+
+The usual way to get a decision from a local model is to send the state and question as a chat prompt, let
+the model write an answer, and parse it. llav avoids three costs of that approach.
+
+- **No generation.** Each question is one forward pass, and the answer is read from the logits of the next
+  token. A text answer needs one sequential decode step per output token, plus whatever reasoning the model
+  writes first. With thinking enabled, Qwen3.5 can write hundreds of tokens before it answers.
+- **The state is read once per request.** Reading the prompt is most of the cost. A 1,800-token state
+  takes 2.5–3.4 s to evaluate, and a question on top of it 0.2–0.25 s. Sending each question as its own
+  prompt re-reads the state every time. llama-server's built-in prompt cache helps less than expected with
+  this model, because its hybrid layers force a checkpoint copy off the GPU on every request (see How it
+  works).
+- **No parsing or retries.** The answer is a probability over the declared options, so there is no
+  malformed output to detect and re-ask, and no grammar to maintain.
+
+Asking all the questions in one text prompt would also read the state once. But the model then writes the
+answers one token at a time, each answer can sway the ones after it, and you get labels without
+probabilities.
+
+Measured on the setup below, for 21 yes/no questions about one state:
+
+| Approach                                               | Decisions/s |
+|--------------------------------------------------------|------------:|
+| A fresh prompt per question, no cache                  |        0.27 |
+| A prompt per question with llama-server's prompt cache |        0.69 |
+| llav (state evaluated once, restored per question)     |     2.3–2.8 |
+
+All three rows use the single-pass readout; none of them generates text, and all three evaluate the state
+for the first time; a cached state raises llav's row to about 5 decisions/s. A generate-and-parse baseline
+was not measured, so the no-generation gain comes on top of these numbers but has no figure of its own.
+the sections above has the details.
+
+### Expected scaling on other hardware
+
+**Only the rows marked measured are measurements.** The rest extrapolate from them; llav has not been run
+on that hardware. The Apple estimates now scale from the measured M3 by GPU core count, so they moved down
+from an earlier guess.
+
+A request has two parts that scale differently:
+- **Evaluating the state** is a large batch of tokens, limited by GPU compute. It speeds up roughly in line
+  with the GPU, and a state the cache already holds skips it entirely.
+- **Each question** is a pass of about 80 tokens, two HTTP round trips, and, on a backend that needs the
+  slot file, a restore. A pass that short is limited by per-step overhead rather than by context: on the
+  laptop a readout takes 124 ms on an 83-token state and 149 ms on a 2,057-token one. Expect a floor of
+  roughly 20–40 ms per question even on the fastest cards.
+
+So the number of questions, not the length of the state, sets the time on a large GPU, and it is all that
+is left once the state is cached.
+
+Estimated, 21 questions on a 1,800-token state, first request and a repeat of the same state, with the
+default model. "Readout + restore" splits the per-question cost, because only the readout gets faster with
+the GPU; a model that passes the trim probe drops the restore entirely. The measured rows carry their
+measured phase timings out to 21 questions; the three-machine table above has the runs themselves.
+
+| Hardware                    |      State | Readout + restore | First request | Repeat request | Decisions/s, repeat |
+|-----------------------------|-----------:|------------------:|--------------:|---------------:|--------------------:|
+| Arc B390 iGPU (measured)    |  2.5–3.4 s |       157 + 20 ms |         6.5 s |          3.7 s |                   6 |
+| MacBook Air M3 (measured)   |     5.35 s |       203 + 12 ms |        10.0 s |          4.5 s |                   5 |
+| Apple M4 Pro/Max (Metal)    |  1.3–2.1 s |    80–150 + 15 ms |     3.5–5.3 s |      2.0–3.5 s |                6–11 |
+| RTX 3090 (measured)         |     0.35 s |        26 + 33 ms |         1.6 s |          1.2 s |                  17 |
+| RTX 4090 / 5090 (CUDA)      | 0.1–0.25 s |  15–25 + 25–30 ms |     1.0–1.4 s |      0.8–1.2 s |               18–26 |
+| H100                        |     ~0.1 s |  15–20 + 20–30 ms |     0.8–1.2 s |      0.7–1.1 s |               19–30 |
+| 16-core desktop CPU, no GPU |    10–20 s |   0.5–1 s + 50 ms |       20–40 s |        11–22 s |                 1–2 |
+
+- **The largest uncertainty is Qwen3.5's recurrent layers.** llama.cpp's kernels for them are newer and
+  less tuned than its attention kernels. The GPU rows could be off by a factor of two.
+- **An H100 gains little over a 4090.** A 4B model is too small to use it; the per-question overhead sets
+  the limit, and on a repeat request it is the only cost left.
+- **On a fast GPU the slot restore costs more than the answer** (33 ms against 26 ms on the 3090), because
+  it uploads the saved state, about 107 MB for this model. A model that passes the trim probe skips it
+  entirely, and the gap grows with the GPU: Granite 4.2 3B answered a first 10-question request in 0.52 s
+  against the default's 0.92 s on that 3090, and 4.52 s against 4.98 s on the laptop.
+- **Concurrency across states** with `--slots` may scale better on large GPUs than on the laptop. Untested.
+- **Past about 20 decisions/s, software matters more than hardware.** The per-question floor comes from
+  llama.cpp evaluating each question's tokens in its own pass; only a batched decode over a shared prefix
+  removes it, and llama-server's HTTP API cannot express that. See
+  the section above.
 
 Tried and rejected, same workload:
 - **llama-server flags.** Flash attention is already on (`-fa auto`); forcing it off costs 30% (6.01 s
@@ -213,8 +333,8 @@ Findings:
 - **Failures come in two kinds.** Granite 4.0 1B (`**`) and LFM2.5-2.6B (`The`, 92–95%) want to start a
   sentence, so the letters get no mass and the softmax over them is noise. Gemma 3, Llama 3.2 1B and Granite
   4.0 350M do answer with a letter but by position: reversing the options flips most choices.
-- **The speed gain from small models is capped** by per-question overhead on this laptop (see the README's
-  scaling notes).
+- **The speed gain from small models is capped** by per-question overhead on this laptop (see "Where a
+  request's time goes").
 
 **Harder questions.** The pinned models were then run on 17 harder questions with a defensible answer:
 sarcasm, negation, implicature, pronoun reference, and small counting and date steps (for example "moved
@@ -303,5 +423,5 @@ validation.
   data: unmeasured.
 - Why Gemma models are 4 to 7 times slower under llav (sliding-window attention with slot restore is the
   suspect): not investigated.
-- Throughput on other GPUs (CUDA, Metal): unmeasured. The README's scaling table is an extrapolation from the
-  laptop figures; replace it with measurements when available.
+- Throughput beyond the three machines measured here: the scaling table is an extrapolation; replace its
+  rows with measurements when a machine becomes available.

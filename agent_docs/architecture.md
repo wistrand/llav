@@ -43,6 +43,7 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
 | `main`          | `cli.py`       | Parse flags; start `LlamaProcess` or attach via `--llama-url`; cleanup    |
 | `Handler`       | `server.py`    | Routes, bearer auth, body limits, JSON errors, `X-Llav-*` headers         |
 | `document`      | `openapi.py`   | OpenAPI 3.1 spec from the code; served at `/openapi.json`                 |
+| `NativeReadout` | `native.py`    | Optional helper process: one batched pass for all questions               |
 | `parse_request` | `questions.py` | Validate the body into `(state, model, [Question])`                       |
 | `Question`      | `questions.py` | Frozen per-question data: option ids, what the model reads, score legend  |
 | `build_answer`  | `questions.py` | Turn probabilities into a `noul` / `choice` / `score` answer              |

@@ -20,12 +20,14 @@ import math
 import os
 from pathlib import Path
 import queue
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 
+from .native import NativeError, NativeReadout
 from .prompt import LABELS, evidence_opening, messages
 from .questions import Question
 
@@ -106,7 +108,8 @@ def softmax(values: list[float]) -> list[float]:
 
 class Engine:
     def __init__(self, client: LlamaClient, slots: int, slot_ctx: int, slot_dir: Path,
-                 queue_timeout: float = 30, n_probs: int = 128, state_cache: int = 4):
+                 queue_timeout: float = 30, n_probs: int = 128, state_cache: int = 4,
+                 native: NativeReadout | None = None):
         self.client = client
         self.slot_ctx = slot_ctx
         self.slot_dir = Path(slot_dir)
@@ -130,6 +133,7 @@ class Engine:
         self._cached = OrderedDict()  # cache filename -> None, least recently used first
         self._cache_lock = threading.Lock()
         self.trims = self._probe_trim()
+        self.native = native  # opt-in fast path; a failure here falls back to llama-server for good
 
     def _probe_trim(self) -> bool:
         """Can the backend roll its cache back to a shared prefix, or must a slot file restore it?
@@ -259,6 +263,20 @@ class Engine:
             for name in list(self._cached):
                 self._drop(name)
 
+    def _evaluate_native(self, prefix: list[int], encoded: list[list[int]], counts: list[int]):
+        """All questions in one batched pass. Returns None when the helper cannot take them."""
+        native = self.native
+        if native is None or not prefix or len(encoded) > native.max_questions:
+            return None
+        try:
+            logprobs, evaluated = native.evaluate(prefix, [ids[len(prefix):] for ids in encoded])
+        except NativeError as error:
+            self.native = None  # one broken helper must not break every later request
+            print(f"llav: native readout disabled: {error}", file=sys.stderr)
+            return None
+        results = [softmax(values[:count]) for values, count in zip(logprobs, counts)]
+        return results, evaluated
+
     def evaluate(self, state, questions: list[Question]) -> tuple[list[list[float]], dict, dict]:
         """Score every question against `state`; returns per-question probabilities, usage, and timing."""
         encoded = [self.encode(state, question) for question in questions]
@@ -285,6 +303,15 @@ class Engine:
         results = []
         shared = bool(prefix) and all(ids[: len(prefix)] == prefix and len(ids) > len(prefix) for ids in encoded)
         cached = False
+        native = self._evaluate_native(prefix, encoded, counts) if shared else None
+        if native is not None:
+            results, computed = native
+            # The helper keeps the last state resident, so a repeat evaluates only the questions.
+            cached = computed < len(prefix)
+            usage = {"input_tokens": computed, "output_tokens": 0}
+            meta = {"shared_state_tokens": len(prefix), "seconds": time.perf_counter() - started,
+                    "state_cache": "hit" if cached else "miss"}
+            return results, usage, meta
         if not shared:
             for ids, count in zip(encoded, counts):
                 probabilities, n = self._readout(ids, count, slot, cache=False)
