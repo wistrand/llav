@@ -54,6 +54,10 @@ class FakeClient:
             ids.extend(ord(char) for char in part)
         return ids
 
+    def detokenize(self, tokens):
+        """The inverse of the character tokenizer, with the control token spelled out again."""
+        return "".join(CONTROL if token == CONTROL_ID else chr(token) for token in tokens)
+
     def post(self, path, body):
         self.calls.append(path)
         if self.slot_dir and path.endswith("action=save"):
@@ -137,6 +141,44 @@ class QuestionTest(unittest.TestCase):
         score = build_answer(questions[2], [0.0, 0.5, 0.5])
         self.assertAlmostEqual(score["score"], 1.5)
         self.assertEqual(score["legend"], {"0": "lo", "1": "mid", "2": "hi"})
+
+
+class NoulCriteriaTest(unittest.TestCase):
+    def question(self, criteria=None):
+        raw = {"type": "noul", "instructions": "is this important"}
+        if criteria is not None:
+            raw["criteria"] = criteria
+        return parse_request(request({"k": raw}))[2][0]
+
+    def test_a_rule_in_criteria_is_repeated_in_the_criterion(self):
+        question = self.question({"true": "america is mentioned"})
+        self.assertEqual(question.instructions,
+                         "is this important\n\nAnswer Yes when: america is mentioned")
+        self.assertEqual(question.descriptions, ("Yes: america is mentioned", "No"))
+
+    def test_both_sides_are_folded_in_order(self):
+        question = self.question({"true": "yes side", "false": "no side"})
+        self.assertEqual(question.instructions,
+                         "is this important\n\nAnswer Yes when: yes side\n\nAnswer No when: no side")
+
+    def test_criteria_free_questions_are_untouched(self):
+        for criteria in (None, {}, {"true": "   "}):
+            with self.subTest(criteria=criteria):
+                question = self.question(criteria)
+                self.assertEqual(question.instructions, "is this important")
+
+    def test_non_string_parts_keep_their_structure(self):
+        question = self.question({"true": {"rule": ["a", "b"]}})
+        self.assertEqual(question.instructions,
+                         {"criterion": "is this important", "answer_yes_when": {"rule": ["a", "b"]}})
+
+    def test_choice_and_score_keep_their_instructions(self):
+        choice = parse_request(request({"k": {"type": "choice", "instructions": "which team?",
+                                              "criteria": {"a": "first", "b": "second"}}}))[2][0]
+        score = parse_request(request({"k": {"type": "score", "instructions": "how bad?",
+                                             "criteria": ["low", "high"]}}))[2][0]
+        self.assertEqual(choice.instructions, "which team?")
+        self.assertEqual(score.instructions, "how bad?")
 
 
 class EngineTest(unittest.TestCase):
@@ -224,6 +266,32 @@ class EngineTest(unittest.TestCase):
         _, usage, meta = engine.evaluate("x" * 400, questions)
         self.assertEqual(meta["state_cache"], "hit")
         self.assertEqual(usage["input_tokens"], 7)
+
+    def test_encode_all_matches_encoding_each_question_whole(self):
+        client = FakeClient()
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "choice", "instructions": "q2", "criteria": {"x": "first", "y": None}},
+            "c": {"type": "score", "instructions": "q3", "criteria": ["low", "high"]},
+        }, state={"ticket": "payouts failing", "tags": ["billing", "urgent"]}))
+        state = {"ticket": "payouts failing", "tags": ["billing", "urgent"]}
+        prefix, encoded = engine.encode_all(state, questions)
+        self.assertEqual(encoded, [engine.encode(state, question) for question in questions])
+        self.assertEqual(prefix, engine.state_prefix(state))
+        for ids in encoded:
+            self.assertEqual(ids[:len(prefix)], prefix)
+
+    def test_encode_all_tokenizes_the_state_once(self):
+        client = FakeClient()
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({
+            f"q{index}": {"type": "noul", "instructions": f"q{index}"} for index in range(5)
+        }, state="a long ticket " * 20))
+        client.tokenized.clear()
+        engine.encode_all("a long ticket " * 20, questions)
+        whole_state = [text for text, _ in client.tokenized if text.count("a long ticket") > 10]
+        self.assertLessEqual(len(whole_state), 2)  # the evidence opening, and the first question's check
 
     def test_missing_label_uses_smallest_returned_logprob(self):
         client = FakeClient({"A": -0.05})

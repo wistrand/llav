@@ -9,15 +9,15 @@
 // per-pass overhead that dominates on a fast GPU.
 //
 // Request : "LLVR" n_prefix n_labels n_suffix, prefix tokens, label tokens, then per suffix: n, tokens.
-// Response: "LLVA" status evaluated, then n_suffix * n_labels float log-probabilities (natural log,
-//           normalized over the whole vocabulary, matching llama-server's n_probs values).
+// Response: "LLVA" status evaluated, then n_suffix * n_labels raw logits. They are not normalized over the
+//           vocabulary: llav softmaxes them over the declared options, and that cancels the normalizer, so
+//           reading 248k logits per question to compute it would change nothing.
 // All integers are little-endian int32, floats little-endian binary32. status 0 is success.
 //
 // The prefix of the previous request stays resident, so repeat requests skip its decode entirely.
 
 #include "llama.h"
 
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -48,20 +48,12 @@ void write_response(int32_t status, int32_t evaluated, const std::vector<float> 
     fflush(stdout);
 }
 
-// Natural-log softmax of the label tokens over the whole vocabulary, as llama-server reports it.
-void label_logprobs(const float * logits, int32_t n_vocab, const std::vector<llama_token> & labels,
-                    std::vector<float> & out) {
-    float top = logits[0];
-    for (int32_t i = 1; i < n_vocab; ++i) {
-        top = logits[i] > top ? logits[i] : top;
-    }
-    double sum = 0.0;
-    for (int32_t i = 0; i < n_vocab; ++i) {
-        sum += std::exp(static_cast<double>(logits[i] - top));
-    }
-    const float norm = top + static_cast<float>(std::log(sum));
+// The label logits, untouched. A softmax over a subset is unchanged by a constant, so normalizing over the
+// vocabulary here would only cost a pass over every entry.
+void label_logits(const float * logits, int32_t n_vocab, const std::vector<llama_token> & labels,
+                  std::vector<float> & out) {
     for (llama_token label : labels) {
-        out.push_back(label >= 0 && label < n_vocab ? logits[label] - norm : -1e30f);
+        out.push_back(label >= 0 && label < n_vocab ? logits[label] : -1e30f);
     }
 }
 
@@ -232,7 +224,7 @@ int main(int argc, char ** argv) {
                 values.clear();
                 break;
             }
-            label_logprobs(logits, n_vocab, labels, values);
+            label_logits(logits, n_vocab, labels, values);
         }
         if (!values.empty()) {
             write_response(0, evaluated, values);

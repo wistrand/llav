@@ -165,6 +165,81 @@ Same scripts on the RTX 3090, 2026-09-23, 1,800-token state:
   batched arithmetic is not bit-identical.
 - The helper compiled unchanged against the Arch package's `llama.h` and against a from-source CUDA build.
 
+### What the helper does to the model choice
+
+The three pinned models that fit the box, measured on the RTX 3090 with `--native-readout`, 2026-09-23,
+1,800-token state:
+
+| Model          | Cold 10 q | Repeat 10 q |  Easy |  Hard |
+|----------------|----------:|------------:|------:|------:|
+| Qwen3.5-4B     |    0.75 s |      0.21 s | 19/19 | 17/17 |
+| Granite 4.2 3B |    0.62 s |      0.27 s | 18/19 | 13/17 |
+| SmolLM3-3B     |    0.62 s |      0.25 s | 17/19 | 10/17 |
+
+With the helper the default is both the fastest on repeat requests and the most accurate, so the reason to
+run a weaker model on fast hardware is gone. The smaller models keep a small lead on a first request, where
+the state prefill still dominates and their smaller weights help; once a state is cached, the per-question
+fixed costs the helper removed were exactly what they had been saving.
+
+Without the helper the order is the opposite on repeats (Granite 0.30 s against Qwen's 0.65 s), so the
+advice depends on whether the helper is built: see "The pinned models on a fast GPU" above.
+SmolLM3's run predates the criteria fold, so its rule placement is unmeasured.
+
+### Cutting llav's own cost per question
+
+Two changes on 2026-09-23, after the helper made llav's own work a visible share of a request on a fast GPU:
+
+- **The state is tokenized once per request, not once per question** (`Engine.encode_all`). The chat
+  template is rendered once per process, checked against a second probe payload so a template that folded
+  the payload into its head or tail is refused; the evidence opening is tokenized once; each question
+  re-tokenizes only from the character where the shared part stops. The first question is compared with the
+  whole-payload tokenization and the whole request falls back to `encode` on any difference. Prompt building
+  for 10 questions on an 1,800-token state went from 99 ms to 9 ms, tokens identical.
+- **The helper returns raw logits instead of normalized log-probabilities.** llav softmaxes them over the
+  declared options, which cancels the normalizer, so computing it meant a pass over all 248,320 vocabulary
+  entries per question for nothing.
+
+Effect on a repeat request of 10 questions, same workload as above:
+
+| Machine  | llama-server | Native before | Native after |
+|----------|-------------:|--------------:|-------------:|
+| Arc iGPU |       1.73 s |        1.26 s |       1.22 s |
+| RTX 3090 |       0.65 s |        0.34 s |       0.21 s |
+
+The 3090 gains where the laptop barely moves: prompt building was 26% of its request and under 1% of the
+laptop's. Against the llama-server path it is now 3.1x on repeats there. Answers are unchanged: 19/19 easy,
+17/17 hard, no order flips.
+
+### Where the decision rule is written matters, per model
+
+Reported 2026-09-23: Granite 4.2 3B answered "no" to a question whose rule sat only in the option
+description. One noul question asked four ways, 400-word state that mentions America throughout:
+
+| Question shape                                                            | Qwen3.5-4B | Granite 4.2 3B |
+|---------------------------------------------------------------------------|-----------:|---------------:|
+| `instructions` "is this important", `criteria.true` "america is mentioned" |      0.993 |          0.018 |
+| Rule in `instructions`, no criteria                                        |      0.999 |          0.999 |
+| Rule in `instructions`, both sides described                               |      0.999 |          0.997 |
+| Vague `instructions`, both sides described                                 |      0.993 |          0.183 |
+
+Granite answers the criterion and reads the option descriptions as labels; Qwen weighs both. The prompt is
+the same shape in every row, so this is the model, not the format. Advice for callers, and for the README:
+llav now repeats a noul's criteria in the criterion (`_fold_noul`), so the caller can write the rule in
+either field. Candidate fixes, same question, before the change:
+
+| What llav puts in the prompt                | Qwen3.5-4B | Granite 4.2 3B |
+|----------------------------------------------|-----------:|---------------:|
+| `Yes: <rule>` / `No`, as it was              |      0.987 |          0.017 |
+| Fill the empty side with `No: otherwise`     |      0.987 |          0.008 |
+| Negate it: `No: not the case that <rule>`    |      0.994 |          0.646 |
+| Fold the rule into the criterion             |      0.996 |          1.000 |
+| Fold it and keep the descriptions (adopted)  |      0.999 |          1.000 |
+
+Patching the option descriptions does not work; only the criterion does. After the change all four shapes
+score 0.997 to 1.000 on both models, and the easy and hard scores are unchanged (Qwen 19/19 and 17/17,
+Granite 18/19 and 13/17). `scripts/benchmark.py accuracy` runs the four shapes against any model.
+`choice` and `score` are not folded and remain exposed to the same effect; unmeasured.
+
 ### Against generating text
 
 The usual way to get a decision from a local model is to send the state and question as a chat prompt, let
@@ -385,8 +460,10 @@ accuracy run comparable to its `shape777` result, not this screening.
 |    4 | Granite 4.2 3B     | trim      |   3.70 s |     0.98 s | 18/19 | 13/17 | No order bias at all, but probabilities saturate at 0 or 1, including on misses      |
 |    5 | SmolLM3-3B         | trim      |   3.02 s |     0.77 s | 17/19 | 10/17 | Misreads negation; the prompt carries today's date (see [gotchas.md](gotchas.md))    |
 
-This ranking weighs accuracy first; on speed alone Granite 4.2 3B now answers a first request faster than
-the default on both machines measured (4.52 s against 4.98 s on the laptop, 0.52 s against 0.92 s on an RTX
+This ranking weighs accuracy first, and with the native helper on a fast GPU it needs no trade-off at all:
+the default is then the fastest on repeats as well (see "What the helper does to the model choice"). Without
+the helper, on speed alone Granite 4.2 3B answers a first request faster than the default on both machines
+measured (4.52 s against 4.98 s on the laptop, 0.52 s against 0.92 s on an RTX
 3090, 10 questions), because it needs no slot restore. On repeat requests the default is still ahead on the
 laptop and behind on the 3090.
 

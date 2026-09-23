@@ -5,7 +5,9 @@
     scripts/benchmark.py timing   http://127.0.0.1:8080
     PYTHONPATH=src scripts/benchmark.py phases http://127.0.0.1:8089 /tmp/llav-XXXX/slots
 
-`accuracy` and `timing` talk to llav. `phases` talks to llama-server directly, so it needs that server's
+`accuracy` covers four checks: the easy and hard question sets, whether reversing a choice's options
+changes its answer, and whether the model reads a decision rule written into `criteria` rather than
+`instructions`. `accuracy` and `timing` talk to llav. `phases` talks to llama-server directly, so it needs that server's
 URL and its --slot-save-path; it disturbs slot 0, so do not point it at a server that is serving.
 
 The numbers in agent_docs/research.md come from these three commands. Question sets are small on purpose:
@@ -180,9 +182,42 @@ def order_bias(url: str) -> None:
           f"max {max(shifts):.2f}")
 
 
+# One decision written four ways. Models weigh `instructions` and `criteria` differently: Granite 4.2 3B
+# answers the criterion and reads option descriptions as labels, so a rule written only into `criteria.true`
+# flips its answer, while Qwen3.5-4B reads both. Every row should come out close to 1.
+RULE_STATE = ("When Chinese leader Xi Jinping visits Washington this week, he will sit down with President "
+              "Donald Trump in a vastly different position than the last time the two men met in the United "
+              "States. China's manufacturing juggernaut racked up a $1.2 trillion global trade surplus last "
+              "year, giving Beijing leverage over Washington and Trump's America First trade war. ") * 6
+RULE_SHAPES = {
+    "rule only in criteria.true":
+        {"type": "noul", "instructions": "is this important", "criteria": {"true": "america is mentioned"}},
+    "rule in instructions":
+        {"type": "noul", "instructions": "Does the text mention America or the United States?"},
+    "rule in instructions, both sides described":
+        {"type": "noul", "instructions": "Does the text mention America or the United States?",
+         "criteria": {"true": "It mentions America or the United States",
+                      "false": "It does not mention either"}},
+    "vague instructions, both sides described":
+        {"type": "noul", "instructions": "is this important",
+         "criteria": {"true": "america is mentioned", "false": "america is not mentioned"}},
+}
+
+
+def rule_placement(url: str) -> None:
+    """Does the model read the decision rule wherever the caller wrote it?"""
+    body, _ = ask(url, RULE_STATE, {f"q{index}": question
+                                    for index, question in enumerate(RULE_SHAPES.values())})
+    answers = list(body["answers"].values())
+    print("rule placement (all should be near 1):")
+    for label, answer in zip(RULE_SHAPES, answers):
+        print(f"  {answer['noul']:.3f}  {label}")
+
+
 def accuracy(args) -> None:
     misses = score(args.url, EASY, "easy") + score(args.url, HARD, "hard")
     order_bias(args.url)
+    rule_placement(args.url)
     for miss in misses:
         print(miss)
 
@@ -251,7 +286,7 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="benchmark.py", description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     for name, function, help_text in [
-        ("accuracy", accuracy, "Easy and hard question sets plus an option-order check"),
+        ("accuracy", accuracy, "Easy and hard question sets, an option-order check and rule placement"),
         ("timing", timing, "Cold and repeat requests on a 1,800-token state"),
     ]:
         command = commands.add_parser(name, help=help_text)

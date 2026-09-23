@@ -19,6 +19,11 @@
 - **A cached slot file is only valid for the run that wrote it.** Filenames carry a per-run id, so a file
   left in a `--slot-dir` by an earlier llav is never restored. Restoring a file from another model or
   context size would be silently wrong.
+- **`criteria` text does not weigh the same as `instructions` on every model.** Granite 4.2 3B answers the
+  criterion and treats option descriptions as labels: a rule written only into `criteria.true` scored 0.017
+  where Qwen3.5-4B scored 0.987. `_fold_noul` now repeats a noul's criteria in the criterion, which fixed
+  both; `scripts/benchmark.py accuracy` checks it on any model. Keep the fold when touching
+  `parse_question`, and remember that `choice` and `score` are still exposed to this.
 - **`n_probs` probabilities depend on temperature.** Only `temperature < 0` gives a plain softmax over raw
   logits. With sampling settings or `post_sampling_probs`, the numbers reflect the sampler chain and are
   not the readout llav was validated with.

@@ -117,6 +117,9 @@ probabilities of the answer labels straight from the logits. Nothing is generate
 | `choice` | `{option: description or null}`, 2–26 options | `{"type": "choice", "choice", "probabilities", "confidence"}` |
 | `score` | ordered array of 2–10 levels | `{"type": "score", "score", "legend", "probabilities", "confidence"}` |
 
+- **A `noul`'s `criteria` are repeated in the criterion text**, because `Yes` and `No` say nothing on their
+  own and some models read only the criterion. Writing the rule in `criteria`, in `instructions`, or in
+  both works the same; `choice` and `score` are untouched, since there the descriptions are the options.
 - **`score`** is the probability-weighted level index, `Σ i·p_i` with 0-based levels, so it can land between
   levels.
 - **`confidence`** is `1 − H(p)/ln(n)`: 1 when all the probability is on one option, 0 when it is uniform.
@@ -151,7 +154,7 @@ it. So llav reads it once per request and keeps it for later requests (`--state-
 default). Whether a model needs a saved slot file between questions is settled by a startup probe rather
 than a list of model names; `GET /v1/models` reports the choice as `backend.prefix_reuse`. The optional
 [native helper](native/README.md) answers every question of a request in one batched pass instead of one
-llama-server pass each, which cuts a repeat request of 10 questions from 0.65 s to 0.34 s on an RTX 3090.
+llama-server pass each, which cuts a repeat request of 10 questions from 0.65 s to 0.21 s on an RTX 3090.
 
 [agent_docs/architecture.md](agent_docs/architecture.md) has the request flow and the slot handling, and
 [agent_docs/research.md](agent_docs/research.md) the measurements behind all of it.
@@ -163,8 +166,8 @@ request; the last column is the same two numbers with the native helper.
 
 | Machine                        | First request | Repeat | With the helper |
 |--------------------------------|--------------:|-------:|----------------:|
-| Laptop, Intel Arc B390, Vulkan |        5.11 s | 1.89 s | 3.78 s / 1.26 s |
-| RTX 3090, CUDA                 |        1.16 s | 0.65 s | 0.82 s / 0.34 s |
+| Laptop, Intel Arc B390, Vulkan |        4.70 s | 1.73 s | 3.86 s / 1.22 s |
+| RTX 3090, CUDA                 |        1.16 s | 0.65 s | 0.75 s / 0.21 s |
 
 `scripts/benchmark.py` reproduces these. Per-phase costs, the other pinned models, an Apple M3 run,
 estimates for other hardware and what a text-generating baseline would cost are in

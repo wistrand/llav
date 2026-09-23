@@ -6,7 +6,8 @@ fixed costs dominate. It is opt-in (`--native-readout`); without it nothing chan
 
 Requests and responses are length-prefixed binary, little-endian, so neither side needs a parser:
     request   b"LLVR" n_prefix n_labels n_suffix, prefix tokens, label tokens, then per suffix: n, tokens
-    response  b"LLVA" status evaluated, then n_suffix * n_labels float32 log-probabilities
+    response  b"LLVA" status evaluated, then n_suffix * n_labels float32 logits, unnormalized: the
+              softmax over the declared options cancels the normalizer, so the helper does not compute it
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ class NativeReadout:
         return data
 
     def evaluate(self, prefix: list[int], suffixes: list[list[int]]) -> tuple[list[list[float]], int]:
-        """Log-probabilities of every label for each suffix, and the tokens the helper evaluated."""
+        """Logits of every label for each suffix, and the tokens the helper evaluated."""
         if not suffixes or len(suffixes) > self.max_questions:
             raise NativeError(f"{len(suffixes)} questions does not fit the helper's {self.max_questions}")
         body = [b"LLVR", struct.pack("<3i", len(prefix), len(self.labels), len(suffixes)),

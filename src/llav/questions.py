@@ -37,6 +37,28 @@ def _is_nonempty_json(value) -> bool:
     return isinstance(value, (dict, list)) and bool(value)
 
 
+def _fold_noul(instructions, criteria: dict):
+    """Repeat a noul's criteria in the criterion, where every model reads them.
+
+    `Yes` and `No` carry no meaning by themselves, so a caller's rule often lives only in `criteria`. Models
+    weigh the two fields differently: Granite 4.2 3B answers the criterion and reads option descriptions as
+    labels, scoring 0.017 where Qwen3.5-4B scored 0.987 on the same question. Folding fixed it for both
+    (1.000 and 0.999); see agent_docs/research.md. The options keep their descriptions.
+    """
+    rules = [(side, criteria.get(side)) for side in ("true", "false") if _is_nonempty_json(criteria.get(side))]
+    if not rules:
+        return instructions
+    answers = {"true": "Yes", "false": "No"}
+    if isinstance(instructions, str) and all(isinstance(value, str) for _, value in rules):
+        lines = [instructions.strip()]
+        lines += [f"Answer {answers[side]} when: {value.strip()}" for side, value in rules]
+        return "\n\n".join(lines)
+    # Non-string instructions or criteria keep their structure: the prompt serializes any JSON value.
+    folded = {"criterion": instructions}
+    folded.update({f"answer_{answers[side].lower()}_when": value for side, value in rules})
+    return folded
+
+
 def _describe(label: str, value):
     """Fold an option key into its description so the model sees both."""
     if value is None:
@@ -76,7 +98,7 @@ def parse_question(key: str, raw) -> Question:
         for side in ("true", "false"):
             _check_value(criteria.get(side), [*loc, "criteria", side], allow_null=True)
         return Question(
-            key, kind, instructions, ("true", "false"),
+            key, kind, _fold_noul(instructions, criteria), ("true", "false"),
             (_describe("Yes", criteria.get("true")), _describe("No", criteria.get("false"))),
         )
 

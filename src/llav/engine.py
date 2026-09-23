@@ -98,6 +98,9 @@ class LlamaClient:
         body = {"content": text, "add_special": False, "parse_special": special}
         return self._field("/tokenize", self.post("/tokenize", body), "tokens")
 
+    def detokenize(self, tokens: list[int]) -> str:
+        return self._field("/detokenize", self.post("/detokenize", {"tokens": tokens}), "content")
+
 
 def softmax(values: list[float]) -> list[float]:
     top = max(values)
@@ -129,6 +132,8 @@ class Engine:
             raise EngineError("Answer label tokens collide")
         self._boundary = {}
         self._boundary_lock = threading.Lock()
+        self._template_parts = None
+        self._template_lock = threading.Lock()
         self._run = uuid.uuid4().hex[:8]  # so stale files from an earlier run are never restored
         self._cached = OrderedDict()  # cache filename -> None, least recently used first
         self._cache_lock = threading.Lock()
@@ -176,6 +181,50 @@ class Engine:
             raise EngineError("Cannot locate the user payload in the chat template")
         start = prompt.index(payload)
         return prompt[:start], payload, prompt[start + len(payload):]
+
+    def _template(self) -> tuple[str, str, list[int], list[int]]:
+        """The template text around the payload, with its tokens. Rendered once, not once per question.
+
+        Two probes with different payloads must give the same head and tail; a template that folds the
+        payload into either one is refused here rather than producing wrong prompts.
+        """
+        with self._template_lock:
+            if self._template_parts is None:
+                head, _, tail = self._split(messages("a", "b", ["Yes", "No"]))
+                other = self._split(messages({"x": ["y"]}, "c" * 40, ["Yes", "No", "Maybe"]))
+                if (head, tail) != (other[0], other[2]):
+                    raise EngineError("The chat template depends on the payload; llav cannot split it")
+                self._template_parts = (head, tail, self.client.tokenize(head), self.client.tokenize(tail))
+            return self._template_parts
+
+    def encode_all(self, state, questions: list[Question]) -> tuple[list[int], list[list[int]]]:
+        """The state prefix and every question's tokens, tokenizing the state once instead of per question.
+
+        The state dominates the payload, so tokenizing it for each question is most of llav's own cost per
+        request. The first question is checked against the whole-payload tokenization; on any difference the
+        whole request falls back to `encode`, which tokenizes each payload in full.
+        """
+        head, _, head_ids, tail_ids = self._template()
+        opening = evidence_opening(state)
+        opening_ids = self.client.tokenize(opening, special=False)
+        # The last token can merge with the text after the evidence value, so the shared part stops before
+        # it and every question re-tokenizes from the character where that token began.
+        prefix = head_ids + opening_ids[:-1]
+        shared_text = self.client.detokenize(opening_ids[:-1])
+        if not opening.startswith(shared_text):
+            return self.state_prefix(state), [self.encode(state, question) for question in questions]
+        encoded = []
+        for index, question in enumerate(questions):
+            payload = messages(state, question.instructions, list(question.descriptions))[-1]["content"]
+            ids = prefix + self.client.tokenize(payload[len(shared_text):], special=False) + tail_ids
+            if index == 0 and ids != self.encode(state, question):
+                return self.state_prefix(state), [self.encode(state, q) for q in questions]
+            if len(ids) >= self.slot_ctx:
+                raise ContextTooLong(question.key, len(ids), self.slot_ctx - 1)
+            if not self._boundary_ok(self._template()[1], len(question.descriptions)):
+                raise EngineError("Answer boundary changes tokenization for this chat template")
+            encoded.append(ids)
+        return prefix, encoded
 
     def encode(self, state, question: Question) -> list[int]:
         # Caller text is tokenized without special-token parsing so it cannot forge chat turns. The
@@ -279,15 +328,14 @@ class Engine:
 
     def evaluate(self, state, questions: list[Question]) -> tuple[list[list[float]], dict, dict]:
         """Score every question against `state`; returns per-question probabilities, usage, and timing."""
-        encoded = [self.encode(state, question) for question in questions]
         counts = [len(question.descriptions) for question in questions]
+        prefix, encoded = self.encode_all(state, questions)
         # One question is worth a shared prefix only when the state can be cached for a later request:
         # priming it costs an extra pass, and pays for itself the next time the same state arrives.
-        prefix = []
-        if len(encoded) > 1 or self.state_cache:
-            prefix = self.state_prefix(state)
-            if len(encoded) == 1 and len(prefix) < STATE_CACHE_MIN_TOKENS:
-                prefix = []
+        if len(encoded) == 1 and not self.state_cache and self.native is None:
+            prefix = []
+        elif len(encoded) == 1 and len(prefix) < STATE_CACHE_MIN_TOKENS:
+            prefix = []
         try:
             slot = self.free.get(timeout=self.queue_timeout)
         except queue.Empty:

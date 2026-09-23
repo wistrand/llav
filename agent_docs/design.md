@@ -28,6 +28,14 @@ reads for each option is built in `parse_question` (`questions.py`):
 | `choice` | `criteria` keys, in request order | `key: description`, just `key` for null, or `{"option", "description"}` for structured values |
 | `score`  | level indexes `0..n-1`            | the level text or structured value as given                                                   |
 
+Why a noul's criteria are repeated in the criterion (`_fold_noul`): `Yes` and `No` say nothing on their
+own, so a caller's rule often lives only in `criteria`, and models weigh the two fields differently.
+Granite 4.2 3B answers the criterion and reads option descriptions as labels: a rule written only into
+`criteria.true` scored 0.017 where Qwen3.5-4B scored 0.987. Appending `Answer Yes when: <criteria.true>`
+(and the `No` side when given) to the criterion fixed both, 1.000 and 0.999, with the option descriptions
+left alone. `choice` and `score` are not folded: there the descriptions are the options. Measurements in
+[research.md](research.md).
+
 Why choice keys are folded into the description: SemIf's fixtures had self-contained descriptions, but
 System One criteria are often `{"billing": "Payments"}` or `{"billing": null}`, where the key carries the
 meaning. Dropping the key would lose it. The cost: for choices, the prompt is no longer byte-identical to
@@ -77,3 +85,5 @@ README; the exception mapping is in [architecture.md](architecture.md).
 - No rate-limit tiers; capacity limits surface as 529.
 - Backticked references in `instructions` are passed through verbatim; nothing resolves them against the
   state.
+- A noul's `criteria` are repeated in the criterion text, so a rule written only there is read by every
+  model. This changes the prompt for such questions, and with it their answers.
