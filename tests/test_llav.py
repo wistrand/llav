@@ -129,6 +129,8 @@ class QuestionTest(unittest.TestCase):
             ({"yes": None, "a": None}, ("a", "yes")),
             ({"Z": None, "A": None}, ("A", "Z")),  # Z has no slot among two options
             ({"A": None, "a": None, "q": None}, ("A", "a", "q")),  # one key per letter
+            ({"a": None, "A": None, "B": None}, ("A", "B", "a")),  # the uppercase key keeps its letter
+            ({"B": None, "a": None, "A": None}, ("A", "B", "a")),
             ({"billing": None, "sales": None}, ("billing", "sales")),
         ]
         for criteria, expected in cases:
@@ -979,6 +981,15 @@ class EvaluateMetricsTest(unittest.TestCase):
                                 "--out", str(directory / "other.json")])
         self.assertIn("not model.gguf", str(caught.exception.code))
         self.assertFalse((directory / "other.json").exists())
+        # Older predictions without a model file may be mixed with newer ones from the same model.
+        mixed = self.fit_records(directory, "model.gguf")
+        rows = [json.loads(line) for line in mixed.read_text().splitlines()]
+        for row in rows[::2]:
+            del row["model_file"]
+        mixed.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        with mock.patch("sys.stdout"):
+            self.evaluate.main(["fit", str(mixed), "--gguf", str(model), "--out", str(directory / "mixed.json")])
+        self.assertTrue((directory / "mixed.json").exists())
 
     def test_geometric_mean_cancels_a_constant_position_preference(self):
         # The same judgement seen through a bias towards whichever option is displayed first.

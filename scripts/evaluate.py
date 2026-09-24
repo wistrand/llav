@@ -578,13 +578,15 @@ def fit(args) -> None:
         sys.exit("these predictions were already calibrated; score again against llav without --calibration")
     gguf = Path(args.gguf)
     models = {record["model"] for record in records if record.get("model")} or {"an unnamed model"}
-    files = {record.get("model_file") for record in records}
-    if files - {None} and files != {gguf.name}:
-        sys.exit(f"these predictions came from {', '.join(sorted(map(str, files)))}, not {gguf.name}; "
+    named = [record.get("model_file") for record in records]
+    files = set(named) - {None}
+    if files and files != {gguf.name}:
+        sys.exit(f"these predictions came from {', '.join(sorted(files))}, not {gguf.name}; "
                  "a temperature fitted on one model does not transfer to another")
-    if files == {None}:
-        print("warning: the predictions do not name their model file (scored before `score` recorded it); "
-              f"make sure they came from {gguf.name}")
+    unnamed = named.count(None)
+    if unnamed:
+        print(f"warning: {unnamed} of {len(records)} predictions do not name their model file (scored before "
+              f"`score` recorded it); make sure they came from {gguf.name}")
     counts = {}
     for record in records:
         counts[record["type"]] = counts.get(record["type"], 0) + 1

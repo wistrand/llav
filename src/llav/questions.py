@@ -74,18 +74,21 @@ def _align_letters(keys: list) -> list:
 
     With keys `B`, `insufficient`, `A` in that order, answer letter A would read "B: Candidate B", and the model
     answers the name instead of the letter: SemIf's candidate-selection family scored 56% that way against 92%
-    once the collision was averaged out (agent_docs/research.md). A single-letter key (either case) within the
-    first len(keys) letters takes its own letter; the other keys fill the remaining letters in request order.
+    once the collision was averaged out (agent_docs/research.md). A single-letter key within the first
+    len(keys) letters takes its own letter; the other keys fill the remaining letters in request order. An
+    uppercase key claims its letter before a lowercase one, so keys `a` and `A` cannot push `A` elsewhere.
     """
     slots = [None] * len(keys)
-    rest = []
-    for key in keys:
-        index = LABELS.find(key.upper()) if len(key) == 1 else -1
-        if 0 <= index < len(keys) and slots[index] is None:
-            slots[index] = key
-        else:
-            rest.append(key)
-    remaining = iter(rest)
+    placed = set()
+    for exact in (True, False):
+        for key in keys:
+            if len(key) != 1 or key in placed or (exact and key not in LABELS):
+                continue
+            index = LABELS.find(key.upper())
+            if 0 <= index < len(keys) and slots[index] is None:
+                slots[index] = key
+                placed.add(key)
+    remaining = iter(key for key in keys if key not in placed)
     return [key if key is not None else next(remaining) for key in slots]
 
 

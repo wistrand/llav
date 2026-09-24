@@ -51,7 +51,8 @@ Why a choice key that is a single letter moves to that letter (`_align_letters`)
 `insufficient`, `A` in request order, answer letter A would read "B: Candidate B", and the model answers the
 name rather than the letter. On SemIf's candidate-selection family that scored 56%; averaging over option
 rotations, which dissolves the collision, scored 92%. A single-letter key (either case) within the first
-`n` letters takes its own letter; the others fill the free letters in request order. Choices without
+`n` letters takes its own letter, uppercase keys before lowercase ones, so `a` cannot take `A`'s letter; the
+others fill the free letters in request order. Choices without
 letter keys keep the request order exactly. `messages()` is unchanged, so this needs no `PROMPT_VERSION`
 bump; like the noul fold, it changes the prompt such questions produce. `probabilities` in the answer keeps
 the caller's key order. Measurements in [research.md](research.md).
