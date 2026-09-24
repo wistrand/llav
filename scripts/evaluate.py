@@ -12,7 +12,11 @@
 
 `label` is `true` or `false` for a noul, the option key for a choice, and the level index for a score. Any
 file in that format works, so a caller's own labelled data can be scored the same way. `score` and `shifts`
-talk only the System One API, so `--model` points them at another server of that shape, such as CLM.
+talk only the System One API, so `--model` points them at another server of that shape, such as CLM, and
+`--api-key-file` adds the bearer token a hosted one needs. Jev through OpenRouter, for example:
+
+    scripts/evaluate.py score https://openrouter.ai/api ~/llav-eval --model typesafe/jev-1.13 \
+        --api-key-file ~/.config/openrouter-key
 
 `score` asks every question once, as a caller would, and reports per source: accuracy; Brier score summed
 over the declared options (so a noul's is twice the binary Brier score); negative log-likelihood of the
@@ -56,6 +60,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import statistics
 import sys
@@ -286,6 +291,8 @@ def fetch(args) -> None:
 # Asking
 
 MODEL = "llav-latest"  # --model changes it, to score another System One server such as CLM
+HEADERS = {"Content-Type": "application/json"}  # --api-key-file adds Authorization, for hosted servers
+RETRY_STATUSES = (429, 502, 503, 529)  # rate limits and overload on a shared service; worth a wait
 
 
 def use_model(name: str) -> None:
@@ -293,17 +300,40 @@ def use_model(name: str) -> None:
     MODEL = name
 
 
+def use_api_key(path: str | None) -> None:
+    """Send the key in `path` as a bearer token. It is read from a file so it never appears in a command line,
+    shell history or process list, and it is never printed."""
+    if not path:
+        return
+    key_file = Path(path).expanduser()
+    if key_file.stat().st_mode & 0o077:
+        print(f"warning: {key_file} can be read by other users; chmod 600 it", file=sys.stderr)
+    key = key_file.read_text().strip()
+    if not key:
+        sys.exit(f"{key_file} is empty")
+    HEADERS["Authorization"] = f"Bearer {key}"
+
+
 def ask(url: str, state, questions: dict) -> tuple[dict, dict]:
     body = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode()
-    request = urllib.request.Request(url + "/v1/systemone", data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=900) as response:
-        return json.load(response), dict(response.headers)
+    for attempt in range(6):
+        request = urllib.request.Request(url + "/v1/systemone", data=body, headers=HEADERS)
+        try:
+            with urllib.request.urlopen(request, timeout=900) as response:
+                return json.load(response), dict(response.headers)
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:300]
+            if error.code in RETRY_STATUSES and attempt < 5:
+                time.sleep(int(error.headers.get("Retry-After") or 0) or 5 * (attempt + 1))
+                continue
+            sys.exit(f"{url} answered {error.code}: {detail}")
+    raise RuntimeError("unreachable")
 
 
 def served_backend(url: str) -> dict:
     """llav's backend details from /v1/models: the model file `fit` checks, and the low-mass cue."""
     try:
-        with urllib.request.urlopen(url + "/v1/models", timeout=30) as response:
+        with urllib.request.urlopen(urllib.request.Request(url + "/v1/models", headers=HEADERS), timeout=30) as response:
             backend = json.load(response)["data"][0]["backend"]
             return backend if isinstance(backend, dict) else {}
     except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
@@ -746,6 +776,8 @@ def main(argv=None) -> None:
         command.add_argument("--out", help="Write per-question results as JSONL, for later analysis")
         command.add_argument("--progress", action="store_true", help="Show a counter on stderr")
         command.add_argument("--model", default=MODEL, help="Model name to request (default: llav-latest)")
+        command.add_argument("--api-key-file", help="File holding an API key, sent as a bearer token; for a "
+                                                   "hosted server such as OpenRouter's Jev")
         if name == "shifts":
             command.add_argument("--max-shifts", type=int, default=26, help="At most this many rotations")
         command.set_defaults(run=function)
@@ -757,6 +789,7 @@ def main(argv=None) -> None:
     command.set_defaults(run=fit)
     args = parser.parse_args(argv)
     use_model(getattr(args, "model", MODEL))
+    use_api_key(getattr(args, "api_key_file", None))
     args.run(args)
 
 

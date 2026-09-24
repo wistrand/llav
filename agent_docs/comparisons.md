@@ -12,6 +12,7 @@ with an Intel Arc B390 iGPU, llama.cpp build 10809, Q8_0 GGUFs.
 - Muse Glimmer 30B, a test
 - Comparison with Laya and von
 - Against the Jevals board
+- Jev through OpenRouter
 - Open questions
 
 ## The System One landscape
@@ -23,7 +24,7 @@ launch material, write-ups and project READMEs; only the rows marked measured we
 
 | Approach                                        | Examples                                              | Here                          |
 |-------------------------------------------------|-------------------------------------------------------|-------------------------------|
-| Hosted, trained, undisclosed                    | Jev (TypeSafe)                                        | not run                       |
+| Hosted, trained, undisclosed                    | Jev (TypeSafe)                                        | Jev measured                  |
 | Letter probabilities of an untrained chat model | SemIf, OneForward, AnyJev, poorjev, decidr, **llav**  | llav measured                 |
 | Trained bidirectional encoder                   | Laya, von, openJev Verdict                            | Laya and von measured         |
 | Frozen LLM plus trained head                    | CLM, minojev, kev, JevForge                           | CLM measured                  |
@@ -34,7 +35,8 @@ launch material, write-ups and project READMEs; only the rows marked measured we
   Independent write-ups put it level with mid-price LLMs and 6.5 to 11.5 points behind the frontier, with
   ECE 0.071 to 0.161, overconfident on multi-class public sets, and fixed largely by one fitted temperature;
   swapping option names changed 32.5% of its answers in one study. Jevals reports 69.0 on PubMedQA and 67.8
-  on the full 77-intent Banking77. None of this was checked here.
+  on the full 77-intent Banking77. Accuracy, calibration, order and speed were since measured here; see
+  [Jev through OpenRouter](#jev-through-openrouter).
 - The same weaknesses showed in llav's own measurements: calibration that depends on the task and yields to
   one temperature per workload ([research.md](research.md#temperature-calibration)), and answers that move
   with option order and names ([research.md](research.md#labelled-evaluation-calibration-and-option-order)).
@@ -412,6 +414,7 @@ How to read the numbers:
 |-------------------------------------|---------------:|------------------:|-----------------:|--------------------:|
 | Gemini 3.8 Flash                    |           73.0 |             92.5% |              4.6 |               42.4% |
 | Jev                                 |           69.0 |             91.3% |              9.2 |               41.3% |
+| Jev, run here through OpenRouter    |           69.1 |             91.3% |              9.5 |               41.3% |
 | Qwen3.8 Flash                       |           62.4 |             89.7% |             -1.4 |               36.1% |
 | GLM-5.3                             |           60.6 |             88.7% |              7.8 |               43.0% |
 | Mistral Medium 3.5                  |           58.0 |             88.8% |            -13.7 |               43.9% |
@@ -424,7 +427,8 @@ How to read the numbers:
 | Laya English                        |          -31.3 |             59.3% |              2.0 |               35.0% |
 | Label frequencies, reads nothing    |              0 |             62.0% |                0 |               41.7% |
 
-The first seven rows are Jevals' board; the llav, von and Laya rows were run here the same day. Laya's
+The first seven rows are Jevals' board; "Jev, run here" and the llav, von and Laya rows were run here the
+same day, and the Jev rerun matching the board shows the rebuilt items are the same. Laya's
 English checkpoint reads at most 512 tokens and its typed-decisions checkpoint 1,024, so the longer
 PubMedQA passages and HelpSteer2 replies were cut short for them. "Temperature fitted (held out)" corrects llav's overconfidence with a
 temperature fitted on half of each task and scored on the other half, both ways round; it changes how sure
@@ -474,6 +478,75 @@ The truth is 186 yes and 114 no.
   would sit between GLM-5.3 and Mistral Medium 3.5 on the board. The comparable number stays 46.5, since every
   row on the board used Jevals' format. The wording advice this gives callers is in
   [design.md](design.md#question-mapping).
+
+## Jev through OpenRouter
+
+TypeSafe's Jev (`typesafe/jev-1.13`, served as `typesafe/jev-1.13-20260917`) run on 2026-09-24 through
+OpenRouter's `https://openrouter.ai/api/v1/systemone`, with `scripts/evaluate.py --model typesafe/jev-1.13
+--api-key-file`, from the laptop. Same 1,176 labelled questions and the same rotations as every other row.
+The whole run cost well under a dollar at $0.042 per million input tokens.
+
+**Reproducing Jevals.** On Jevals' two rebuilt tasks this run gave PubMedQA 69.1 (91.3%) and HelpSteer2 9.5
+(41.3%), against Jevals' published 69.0 (91.3%) and 9.2 (41.3%): same accuracy, scores within 0.3. The item
+reconstruction and the Decision Score match Jevals', so the llav, von and Laya rows beside Jev there compare
+fairly.
+
+| Source                          |   Jev | llav, Qwen3.5-4B | llav, Muse 30B |   von | Laya typed |
+|---------------------------------|------:|-----------------:|---------------:|------:|-----------:|
+| DBpedia                         | 99.1% |            98.2% |          98.7% | 90.2% |      87.5% |
+| SemIf evidence interpretation   | 95.8% |            95.8% |          97.9% | 58.3% |      70.8% |
+| SemIf rule application          | 97.9% |            89.6% |          83.3% | 62.5% |      68.8% |
+| SemIf candidate selection       | 95.8% |            95.8% |         100.0% | 31.2% |      58.3% |
+| BoolQ                           | 93.5% |            92.5% |          90.5% | 84.0% |      77.0% |
+| Banking77 card intents          | 88.5% |            75.0% |          86.1% | 80.8% |      77.4% |
+| AG News                         | 85.0% |            80.5% |          75.5% | 86.0% |      93.5% |
+| Yelp stars                      | 72.5% |            59.0% |          54.0% | 58.0% |      43.5% |
+| All                             | 89.0% |            82.9% |          82.9% | 76.4% |      74.8% |
+| ECE, all                        | 0.040 |            0.069 |          0.037 | 0.115 |      0.042 |
+| Right when above 0.9            | 96.3% |            93.2% |          97.3% | 89.3% |      96.0% |
+| Answer changes under some order |    6% |              19% |                |    0% |        30% |
+
+llav's order figure leaves out candidate selection, fixed since by `_align_letters`; Muse was not run through
+`shifts`.
+
+- **Jev is the most accurate system measured, 6 points ahead of llav overall.** The lead is small where the
+  answer is clear (DBpedia, BoolQ, SemIf's evidence and candidates: 0 to 1 point), 8 points on SemIf's rule
+  application, and largest on confusable options: 13.5 points on the Banking77 card intents and on Yelp's
+  star ratings. Muse Glimmer
+  closes most of the Banking gap (86.1%) but not Yelp's.
+- **Jev is well calibrated without fitting** (ECE 0.040; answers above 0.9 right 96.3% of the time), as
+  TypeSafe claims for these tasks. Muse under llav is comparable (0.037); Qwen under llav needs a fitted
+  temperature to get there (0.023 held out, see [research.md](research.md#temperature-calibration)).
+- **Jev is less order-sensitive than llav, not immune.** 6.4% of questions changed answer under some option
+  rotation: Yelp 15.5%, Banking 10.1%, AG News 4.0%, DBpedia 0.4%, against llav's 35.5%, 32.2%, 8.5% and 3.6%.
+  Part of that is not order: Jev is not deterministic, and Jevals measured 2.3 to 2.7% of identical choice and
+  score requests changing answer. The questions that flipped were near-ties (median top probability 0.6).
+- Jev rounds probabilities to two decimals, exact zeros included, so a wrong answer at 0 costs NLL the
+  clipped maximum; its NLL column is inflated by that, not by bad probabilities (AG News 1.735 against an
+  ECE of 0.083).
+
+**Speed.** Measured from the laptop, end to end over the network:
+
+| Request                                  |  Jev, median |  Jev, fastest |
+|------------------------------------------|-------------:|--------------:|
+| 1 question, short text                   |       345 ms |        313 ms |
+| 1 question, 300-token text               |       316 ms |        303 ms |
+| 5 questions, same text                   |       327 ms |        283 ms |
+| 10 questions, same text                  |       416 ms |        330 ms |
+| Jevals' logs, PubMedQA / HelpSteer2      | 438 / 479 ms | 357 / 362 ms |
+
+- About 140 ms of that is the network (a plain request to OpenRouter took that long), so Jev's own time is
+  roughly 150 to 300 ms per request (estimate; the network figure is from another endpoint). Jevals' 95th
+  percentiles are 653 to 693 ms. TypeSafe's "70 to 500 ms end to end" is its upper half from outside.
+- More questions per request cost little: 10 questions took about 100 ms more than one.
+- TypeSafe's "40 to 200 times faster than frontier LLMs" holds only against slow generators: Jevals' fastest
+  LLM, Gemini 3.8 Flash, answered in a median of 1,636 ms, about 4 times Jev's time.
+- A local llav on a GPU next to the client is faster than Jev over the network: 88 ms for one question and
+  231 ms for ten on a new 300-token text, 29 and 171 ms on a repeated one, on the RTX PRO 4000
+  ([performance and memory above](#comparison-with-laya-and-von)). On the laptop's iGPU llav is slower than
+  Jev (1.7 s for a repeat of 10 questions on an 1,800-token text).
+- Throughput, one request at a time: 1,176 questions (about 1,145 requests) in 413 s and 8,072 rotations
+  (976 requests) in 363 s, about 2.7 to 2.8 requests a second.
 
 ## Open questions
 

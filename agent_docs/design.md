@@ -17,6 +17,14 @@ llav and the reference disagree, check the current reference before changing any
 public shape, not an SDK. TypeSafe also documents `GET /v1/models`; its response shape is not published, so
 llav's `/v1/models` body is its own (inferred OpenAI-style list).
 
+Jev's actual responses, seen through OpenRouter on 2026-09-24, have llav's shape: `model`, `answers` and
+`usage`, a noul answer with only `noul` (no `confidence`, whatever OpenRouter's reference says), choice and
+score answers with `probabilities` and `confidence`, and score answers with `legend`. The differences are
+Jev's, not gaps in llav: probabilities rounded to two decimals, exact zeros included; choice probabilities
+not in the request's option order; `usage.output_tokens` reported (73 for three questions) though output is
+not billed; a dated model id (`typesafe/jev-1.13-20260917`). OpenRouter adds `id`, `provider`,
+`usage.cost` and its own error shape.
+
 Questions carry their kind in a `type` field (`{"type": "noul", "instructions": ...}`), as TypeSafe's docs
 state: "A `Question` is one of three types, set by its `type` field" (checked 2026-09-24). CLM's README shows
 the kind as a wrapper key instead (`{"noul": {...}}`); its server accepts `type`, like llav. CLM also takes a

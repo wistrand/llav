@@ -233,6 +233,10 @@ measured with `scripts/evaluate.py`. ECE is the expected calibration error of th
 - Trained open System One models scored lower on the same questions: Laya 73.0 to 74.8% (its
   `typed-decisions` checkpoint is better calibrated, ECE 0.042), von 76.4%, CLM 39.7%. The encoders are
   about three times faster and win on news-topic classification.
+- TypeSafe's Jev, run through OpenRouter on the same 1,176 questions, scored 89.0% with ECE 0.040: 6 points
+  ahead, most of it on confusable options (Banking77 card intents, Yelp stars), and less order-sensitive
+  (6% of answers change with option order, against llav's 19%). From here it answered in about 0.3 to 0.4 s
+  per request; a local llav on a GPU was faster, on a laptop iGPU slower.
 - On two of Jevals' published tasks, rebuilt item for item, llav scored a Decision Score of 46.5 on PubMedQA
   (Jev 69.0; von and Laya near guessing) and -11.1 on HelpSteer2 helpfulness (Jev 9.2, and no model clearly
   beats guessing there).

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler
+import io
 import json
 import math
 import os
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import unittest
 from unittest import mock
+import urllib.error
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -1041,6 +1043,35 @@ class EvaluateMetricsTest(unittest.TestCase):
         self.assertEqual(state, {"question": "Does X help?", "context": ["First.", "Second, näive."]})
         self.assertEqual(json.dumps(state, separators=(",", ":"), ensure_ascii=False),
                          '{"question":"Does X help?","context":["First.","Second, näive."]}')
+
+    def test_api_key_file_is_sent_as_a_bearer_token_and_never_echoed(self):
+        directory = Path(tempfile.mkdtemp())
+        key_file = directory / "key"
+        key_file.write_text("sk-test-123\n")
+        key_file.chmod(0o600)
+        self.addCleanup(self.evaluate.HEADERS.pop, "Authorization", None)
+        self.evaluate.use_api_key(str(key_file))
+        sent = []
+
+        class Response(io.BytesIO):
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+
+        def fake_urlopen(request, timeout):
+            sent.append(dict(request.header_items()))
+            return Response(b'{"answers": {}}')
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            self.evaluate.ask("https://example.invalid/api", "text", {})
+        self.assertEqual(sent[0]["Authorization"], "Bearer sk-test-123")
+
+    def test_a_server_error_ends_the_run_with_its_message(self):
+        error = urllib.error.HTTPError("u", 402, "Payment Required", {}, io.BytesIO(b'{"error": "no credit"}'))
+        with mock.patch("urllib.request.urlopen", side_effect=error), self.assertRaises(SystemExit) as caught:
+            self.evaluate.ask("https://example.invalid/api", "text", {})
+        self.assertIn("402", str(caught.exception.code))
+        self.assertIn("no credit", str(caught.exception.code))
 
     def test_geometric_mean_cancels_a_constant_position_preference(self):
         # The same judgement seen through a bias towards whichever option is displayed first.
