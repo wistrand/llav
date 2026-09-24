@@ -25,7 +25,7 @@ reads for each option is built in `parse_question` (`questions.py`):
 | Type     | Options, in order                 | What the model reads per option                                                               |
 |----------|-----------------------------------|-----------------------------------------------------------------------------------------------|
 | `noul`   | `true`, `false`                   | `Yes` / `No`, or `Yes: <criteria.true>` / `No: <criteria.false>`                              |
-| `choice` | `criteria` keys, in request order | `key: description`, just `key` for null, or `{"option", "description"}` for structured values |
+| `choice` | `criteria` keys, letters aligned  | `key: description`, just `key` for null, or `{"option", "description"}` for structured values |
 | `score`  | level indexes `0..n-1`            | the level text or structured value as given                                                   |
 
 Why a noul's criteria are repeated in the criterion (`_fold_noul`): `Yes` and `No` say nothing on their
@@ -41,6 +41,15 @@ System One criteria are often `{"billing": "Payments"}` or `{"billing": null}`, 
 meaning. Dropping the key would lose it. The cost: for choices, the prompt is no longer byte-identical to
 SemIf's, so the SemIf agreement result does not transfer directly (see [research.md](research.md)).
 
+Why a choice key that is a single letter moves to that letter (`_align_letters`): with keys `B`,
+`insufficient`, `A` in request order, answer letter A would read "B: Candidate B", and the model answers the
+name rather than the letter. On SemIf's candidate-selection family that scored 56%; averaging over option
+rotations, which dissolves the collision, scored 92%. A single-letter key (either case) within the first
+`n` letters takes its own letter; the others fill the free letters in request order. Choices without
+letter keys keep the request order exactly. `messages()` is unchanged, so this needs no `PROMPT_VERSION`
+bump; like the noul fold, it changes the prompt such questions produce. `probabilities` in the answer keeps
+the caller's key order. Measurements in [research.md](research.md).
+
 `instructions` and structured criteria are placed into the JSON payload as JSON values, not stringified.
 
 ## Answers
@@ -51,6 +60,11 @@ Built by `build_answer` (`questions.py`):
 - `choice`: argmax key, full `probabilities` map, `confidence`.
 - `score`: `Σ i·p_i` over 0-based levels, `legend` (index to level text, structured levels JSON-encoded),
   `probabilities` keyed by index string, `confidence`.
+- With `--calibration`, every probability above is the calibrated one, `softmax(log p / T)` with `T` from
+  the file for the question's type, so `noul`, `score`, `probabilities` and `confidence` all change and the
+  chosen option does not. One `T` per type, not per option or per source: vector or matrix scaling would
+  overfit the few hundred labels a caller typically has, and a per-source `T` needs a source the API does
+  not carry.
 - `confidence()` is `1 − H(p)/ln(n)`. TypeSafe says only that confidence is derived from the
   distribution; the two examples in its docs do not match normalized entropy, Gini, or top-two margin, so
   its formula is unknown. llav's formula is its own and is documented as such.
@@ -66,6 +80,11 @@ unchanged; responses always carry llav's own id.
 - `usage.input_tokens` is the number of prompt tokens llama-server actually computed (`timings.prompt_n`),
   so a shared state counts once and restored tokens count zero. It is not a billing figure.
 - `usage.output_tokens` is always 0.
+- `X-Llav-Calibration` names the calibration file in use (the first 12 hex digits of its SHA-256) or
+  `none`, so a caller can tell calibrated answers from raw ones.
+- Candidate mass goes in `X-Llav-Candidate-Mass`, not in the answers, for the same reason. It is the share of
+  the full vocabulary on the declared labels, from OneForward's `candidate_mass`. It flags a model that did
+  not answer with a letter; it is not calibration.
 - Timing and sharing details go in `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`, not in `usage`, so
   strict clients that validate `usage` keep working.
 
@@ -81,9 +100,12 @@ README; the exception mapping is in [architecture.md](architecture.md).
 - At most 26 choice options (single-token letters `A`–`Z`); TypeSafe allows 255. Going further needs
   multi-token labels or another readout. See [gotchas.md](gotchas.md).
 - The confidence formula is llav's own.
-- Probabilities are uncalibrated option scores from a 4B model, not a trained decision head.
+- Probabilities are uncalibrated option scores from a 4B model, not a trained decision head, unless the
+  operator loads a temperature file fitted on their own labelled data.
 - No rate-limit tiers; capacity limits surface as 529.
 - Backticked references in `instructions` are passed through verbatim; nothing resolves them against the
   state.
 - A noul's `criteria` are repeated in the criterion text, so a rule written only there is read by every
   model. This changes the prompt for such questions, and with it their answers.
+- A choice key that is a single letter is shown at that answer letter, so the options may reach the model
+  in a different order than the request gave them.

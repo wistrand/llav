@@ -16,14 +16,14 @@ install route ships them:
 
 ```bash
 # Arch (llama-cpp package), or any system where llama.h is on the default include path
-g++ -O2 -std=c++17 -o llav-readout native/llav-readout.cpp -lllama
+g++ -O2 -std=c++17 -pthread -o llav-readout native/llav-readout.cpp -lllama
 
 # Homebrew
-g++ -O2 -std=c++17 -o llav-readout native/llav-readout.cpp \
+g++ -O2 -std=c++17 -pthread -o llav-readout native/llav-readout.cpp \
     -I/opt/homebrew/include -L/opt/homebrew/lib -lllama
 
 # A llama.cpp built from source
-g++ -O2 -std=c++17 -o llav-readout native/llav-readout.cpp \
+g++ -O2 -std=c++17 -pthread -o llav-readout native/llav-readout.cpp \
     -I/path/to/llama.cpp/include -I/path/to/llama.cpp/ggml/include \
     -L/path/to/llama.cpp/build/bin -lllama -Wl,-rpath,/path/to/llama.cpp/build/bin
 ```
@@ -44,6 +44,10 @@ one pass (default 16); a request with more goes to llama-server. `GET /v1/models
 
 ## Notes
 
+- The helper also returns each question's log-sum-exp over the vocabulary, for `X-Llav-Candidate-Mass`.
+  The pass is split across the helper's `--threads`, 4 since llav does not pass the flag. Computed serially
+  it cost 19 ms per question on the RTX PRO 4000 box, more than the batched decode (see
+  [agent_docs/research.md](../agent_docs/research.md)).
 - The helper keeps only the most recent state resident, so `X-Llav-State-Cache` reports a hit when a request
   repeats the state its predecessor used. llav's slot-file cache serves the llama-server path.
 - Requests are serialized through the one helper process. With `--slots` above 1, llama-server can answer

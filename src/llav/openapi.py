@@ -65,13 +65,32 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
                                 "schema": {"type": "string", "enum": ["hit", "miss", "off"]},
                                 "description": "Whether the state came from llav's state cache.",
                             },
+                            "X-Llav-Calibration": {
+                                "schema": {"type": "string"},
+                                "description": (
+                                    "The temperature calibration applied to the probabilities, as the first 12 "
+                                    "hex digits of the calibration file's SHA-256, or 'none' for raw scores."
+                                ),
+                            },
+                            "X-Llav-Candidate-Mass": {
+                                "schema": {"type": "string"},
+                                "description": (
+                                    "Per question, in answer order, comma-separated: the probability the "
+                                    "model gave the declared option letters over its whole vocabulary. "
+                                    "Near 1 when it answered with an option; low when it wanted another "
+                                    "token, in which case the answer's probabilities are noise. Not a "
+                                    "measure of correctness."
+                                ),
+                            },
                         },
                         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Response"}}},
                     },
                     "400": _error("Content-Length is not a nonnegative integer."),
                     "401": _error("Missing or invalid API key."),
-                    "411": _error("The body was sent with Transfer-Encoding; send it with Content-Length."),
-                    "413": _error("The body exceeds the server's limit."),
+                    "411": _error("The body was sent with Transfer-Encoding; send it with Content-Length. "
+                                  "Sent before the body is read, so the connection closes."),
+                    "413": _error("The body exceeds the server's limit. Sent before the body is read, so "
+                                  "a client still uploading may see the connection close instead."),
                     "422": _error("Validation failed; detail lists the field paths."),
                     "500": _error("The llama-server backend failed, or llav hit an internal error."),
                     "529": _error("All slots were busy; retry with backoff."),

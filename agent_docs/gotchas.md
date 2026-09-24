@@ -29,7 +29,14 @@
   not the readout llav was validated with.
 - **A label can fall outside the top `n_probs`.** `_readout` then gives it the smallest returned logprob, an
   upper bound on its true value. Raising `n_probs` (an `Engine` argument) tightens the bound at the cost of
-  response size.
+  response size. The candidate mass on the llama-server path inherits the bound; the native helper's is
+  exact.
+- **Option keys that are letters collide with the answer letters.** Keys `A`, `B` shown in another order put
+  "B: Candidate B" at answer letter A, and the model answers the name. `_align_letters` in `questions.py`
+  prevents it by showing such keys at their own letter; keep it when touching `parse_question`. Names in the
+  state alone ("Candidate A" with keys `first`, `second`) are not covered.
+- **The native helper's protocol is versioned in its ready line.** A binary built before the candidate-mass
+  normalizer was added is refused at startup with "rebuild it from native/". Rebuild after pulling.
 - **Labels must be single tokens with a clean boundary.** `Engine.__init__` refuses to start if any of
   `A`–`Z` is not one token, and `_boundary_ok` rejects a chat template whose tail merges with a label. A
   new model or template can fail here at startup.
@@ -53,6 +60,9 @@
   tests.
 - **Responses sent before reading the body must close the connection.** With HTTP/1.1 keep-alive, an unread
   body would be parsed as the next request. `do_POST` adds `Connection: close` to every early response.
+  The cost: a client still writing a rejected body gets a broken pipe rather than the status. Measured with
+  a 9 MiB body against both a local server and one over a network; draining the body first would hand back
+  a readable 413 but reintroduce exactly the work the early reject avoids.
 
 ## Findings
 

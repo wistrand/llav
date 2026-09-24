@@ -26,9 +26,10 @@ class Question:
     key: str
     type: str  # "noul" | "choice" | "score"
     instructions: object
-    option_ids: tuple  # answer keys: choice keys, ("true", "false"), or level indexes
+    option_ids: tuple  # answer keys: choice keys, ("true", "false"), or level indexes, in label order
     descriptions: tuple  # what the model reads for each option, in label order
     legend: tuple = ()  # score levels as strings
+    declared: tuple = ()  # choice keys in request order, when that differs from label order
 
 
 def _is_nonempty_json(value) -> bool:
@@ -66,6 +67,26 @@ def _describe(label: str, value):
     if isinstance(value, str):
         return f"{label}: {value}" if value.strip() else label
     return {"option": label, "description": value}
+
+
+def _align_letters(keys: list) -> list:
+    """Order choice keys so a key that is itself a letter sits at that answer letter.
+
+    With keys `B`, `insufficient`, `A` in that order, answer letter A would read "B: Candidate B", and the model
+    answers the name instead of the letter: SemIf's candidate-selection family scored 56% that way against 92%
+    once the collision was averaged out (agent_docs/research.md). A single-letter key (either case) within the
+    first len(keys) letters takes its own letter; the other keys fill the remaining letters in request order.
+    """
+    slots = [None] * len(keys)
+    rest = []
+    for key in keys:
+        index = LABELS.find(key.upper()) if len(key) == 1 else -1
+        if 0 <= index < len(keys) and slots[index] is None:
+            slots[index] = key
+        else:
+            rest.append(key)
+    remaining = iter(rest)
+    return [key if key is not None else next(remaining) for key in slots]
 
 
 def _check_value(value, loc: list, allow_null: bool = False) -> None:
@@ -111,9 +132,10 @@ def parse_question(key: str, raw) -> Question:
             if not option:
                 raise ValidationError([*loc, "criteria"], "option keys must be nonempty")
             _check_value(value, [*loc, "criteria", option], allow_null=True)
+        order = _align_letters(list(criteria))
         return Question(
-            key, kind, instructions, tuple(criteria),
-            tuple(_describe(option, value) for option, value in criteria.items()),
+            key, kind, instructions, tuple(order), tuple(_describe(option, criteria[option]) for option in order),
+            declared=tuple(criteria) if order != list(criteria) else (),
         )
 
     if not isinstance(criteria, list) or not 2 <= len(criteria) <= MAX_LEVELS:
@@ -162,6 +184,8 @@ def build_answer(question: Question, probabilities: list[float]) -> dict:
     by_id = dict(zip(question.option_ids, probabilities))
     if question.type == "choice":
         best = max(range(len(probabilities)), key=probabilities.__getitem__)
+        if question.declared:  # the caller's order, not the order the model saw
+            by_id = {option: by_id[option] for option in question.declared}
         return {
             "type": "choice", "choice": question.option_ids[best],
             "probabilities": by_id, "confidence": confidence(probabilities),

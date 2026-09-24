@@ -6,8 +6,11 @@ fixed costs dominate. It is opt-in (`--native-readout`); without it nothing chan
 
 Requests and responses are length-prefixed binary, little-endian, so neither side needs a parser:
     request   b"LLVR" n_prefix n_labels n_suffix, prefix tokens, label tokens, then per suffix: n, tokens
-    response  b"LLVA" status evaluated, then n_suffix * n_labels float32 logits, unnormalized: the
-              softmax over the declared options cancels the normalizer, so the helper does not compute it
+    response  b"LLVA" status evaluated, then per suffix n_labels float32 raw logits and the float32 log of
+              the vocabulary normalizer; llav needs the normalizer only for the candidate mass
+
+The ready line names the protocol version, so a helper built from older source is refused at startup instead
+of being read with the wrong response layout.
 """
 
 from __future__ import annotations
@@ -16,6 +19,9 @@ from pathlib import Path
 import struct
 import subprocess
 import threading
+
+
+PROTOCOL = "protocol 2"
 
 
 class NativeError(Exception):
@@ -38,7 +44,14 @@ class NativeReadout:
                                             stderr=subprocess.PIPE, bufsize=0)
         except OSError as error:
             raise NativeError(f"cannot start {binary}: {error}") from error
-        self._wait_for_ready()
+        try:
+            self._wait_for_ready()
+        except NativeError:
+            self.process.kill()  # a helper with the wrong protocol is still running
+            self.process.wait(timeout=10)
+            for pipe in (self.process.stdin, self.process.stdout, self.process.stderr):
+                pipe.close()
+            raise
         # Loading prints to stderr for the process's whole life; drain it so a full pipe cannot block it.
         threading.Thread(target=self._drain, daemon=True).start()
 
@@ -47,6 +60,8 @@ class NativeReadout:
             text = line.decode(errors="replace").rstrip()
             self._errors.append(text)
             if "llav-readout ready" in text:
+                if PROTOCOL not in text:
+                    raise NativeError(f"the helper does not speak {PROTOCOL}; rebuild it from native/")
                 return
         raise NativeError("the helper exited before it was ready: " + " | ".join(self._errors[-3:]))
 
@@ -64,8 +79,8 @@ class NativeReadout:
             raise NativeError("the helper stopped answering: " + " | ".join(self._errors[-3:]))
         return data
 
-    def evaluate(self, prefix: list[int], suffixes: list[list[int]]) -> tuple[list[list[float]], int]:
-        """Logits of every label for each suffix, and the tokens the helper evaluated."""
+    def evaluate(self, prefix: list[int], suffixes: list[list[int]]) -> tuple[list[list[float]], list[float], int]:
+        """Logits of every label and the log normalizer for each suffix, and the tokens the helper evaluated."""
         if not suffixes or len(suffixes) > self.max_questions:
             raise NativeError(f"{len(suffixes)} questions does not fit the helper's {self.max_questions}")
         body = [b"LLVR", struct.pack("<3i", len(prefix), len(self.labels), len(suffixes)),
@@ -83,10 +98,11 @@ class NativeReadout:
             status, evaluated = struct.unpack("<2i", self._read(8))
             if status != 0:
                 raise NativeError(f"the helper returned status {status}: " + " | ".join(self._errors[-3:]))
-            width = len(self.labels)
+            width = len(self.labels) + 1
             raw = self._read(4 * width * len(suffixes))
         values = struct.unpack(f"<{width * len(suffixes)}f", raw)
-        return [list(values[index * width:(index + 1) * width]) for index in range(len(suffixes))], evaluated
+        rows = [values[index * width:(index + 1) * width] for index in range(len(suffixes))]
+        return [list(row[:-1]) for row in rows], [row[-1] for row in rows], evaluated
 
     def close(self) -> None:
         if self.process.poll() is None:

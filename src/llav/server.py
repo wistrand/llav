@@ -13,6 +13,7 @@ import time
 import traceback
 from urllib.parse import urlsplit
 
+from .calibration import Calibration
 from .engine import ContextTooLong, Engine, EngineError, Overloaded
 from .openapi import document
 from .questions import ValidationError, build_answer, parse_request
@@ -42,7 +43,8 @@ class Server(ThreadingHTTPServer):
 
 class App:
     def __init__(self, engine: Engine, model_id: str, aliases: list[str], api_key: str | None,
-                 backend: dict, health=lambda: True, web_ui: bytes | None = None):
+                 backend: dict, health=lambda: True, web_ui: bytes | None = None,
+                 calibration: Calibration | None = None):
         self.engine = engine
         self.model_id = model_id
         self.accepted = {model_id, *aliases}
@@ -51,6 +53,7 @@ class App:
         self.backend = backend
         self.health = health
         self.web_ui = web_ui
+        self.calibration = calibration
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -176,11 +179,16 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self._send(500, {"detail": "Internal error"})
             return
+        calibration = self.app.calibration
+        if calibration:
+            results = [calibration.apply(question.type, p) for question, p in zip(questions, results)]
         answers = {question.key: build_answer(question, p) for question, p in zip(questions, results)}
         self._send(200, {"model": self.app.model_id, "answers": answers, "usage": usage}, {
             "X-Llav-Seconds": f"{meta['seconds']:.3f}",
             "X-Llav-Shared-State-Tokens": str(meta["shared_state_tokens"]),
             "X-Llav-State-Cache": meta["state_cache"],
+            "X-Llav-Candidate-Mass": ",".join(f"{mass:.4f}" for mass in meta["candidate_mass"]),
+            "X-Llav-Calibration": calibration.id if calibration else "none",
         })
 
 

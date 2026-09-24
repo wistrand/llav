@@ -9,18 +9,24 @@
 // per-pass overhead that dominates on a fast GPU.
 //
 // Request : "LLVR" n_prefix n_labels n_suffix, prefix tokens, label tokens, then per suffix: n, tokens.
-// Response: "LLVA" status evaluated, then n_suffix * n_labels raw logits. They are not normalized over the
-//           vocabulary: llav softmaxes them over the declared options, and that cancels the normalizer, so
-//           reading 248k logits per question to compute it would change nothing.
+// Response: "LLVA" status evaluated, then per suffix n_labels raw logits followed by the log of the
+//           vocabulary normalizer (logsumexp over every logit). llav softmaxes the label logits over the
+//           declared options, which cancels the normalizer; it needs the normalizer only for the candidate
+//           mass, the share of the whole vocabulary the options received.
 // All integers are little-endian int32, floats little-endian binary32. status 0 is success.
 //
 // The prefix of the previous request stays resident, so repeat requests skip its decode entirely.
+// The ready line names the protocol version; llav refuses a helper that does not match.
 
 #include "llama.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -48,13 +54,78 @@ void write_response(int32_t status, int32_t evaluated, const std::vector<float> 
     fflush(stdout);
 }
 
-// The label logits, untouched. A softmax over a subset is unchanged by a constant, so normalizing over the
-// vocabulary here would only cost a pass over every entry.
-void label_logits(const float * logits, int32_t n_vocab, const std::vector<llama_token> & labels,
-                  std::vector<float> & out) {
-    for (llama_token label : labels) {
-        out.push_back(label >= 0 && label < n_vocab ? logits[label] : -1e30f);
+// exp(x) for x <= 0, within 5e-6 relative error: 2^t split into an integer power, set in the exponent bits,
+// and a polynomial for the fraction. Unlike std::exp it has no library call, so the loop below vectorizes;
+// the normalizer only feeds the candidate mass, which is reported to four decimals.
+inline float exp_nonpositive(float x) {
+    x = x < -87.0f ? -87.0f : x;
+    const float t = x * 1.4426950409f;
+    const int32_t whole = static_cast<int32_t>(t);  // toward zero, so the fraction is in (-1, 0]
+    const float f = t - static_cast<float>(whole);
+    const float p = 1.0f + f * (0.6931471806f + f * (0.2402265070f + f * (0.0555041087f + f * (0.0096181291f
+                    + f * (0.0013333558f + f * (0.0001540353f + f * 0.0000152527f))))));
+    const int32_t bits = (whole + 127) << 23;
+    float scale;
+    std::memcpy(&scale, &bits, sizeof(scale));
+    return p * scale;
+}
+
+// Largest logit and sum of exp(logit - largest) over [begin, end).
+void partial_normalizer(const float * logits, int32_t begin, int32_t end, float & top, float & sum) {
+    top = -INFINITY;
+    for (int32_t i = begin; i < end; ++i) {
+        top = logits[i] > top ? logits[i] : top;
     }
+    float lanes[16] = {};
+    int32_t i = begin;
+    for (; i + 16 <= end; i += 16) {
+        for (int32_t j = 0; j < 16; ++j) {
+            lanes[j] += exp_nonpositive(logits[i + j] - top);
+        }
+    }
+    double total = 0.0;
+    for (float lane : lanes) {
+        total += lane;
+    }
+    for (; i < end; ++i) {
+        total += exp_nonpositive(logits[i] - top);
+    }
+    sum = static_cast<float>(total);
+}
+
+// log of sum(exp(logit)) over the vocabulary, per row. The pass reads every logit (248k for Qwen3.5), about
+// 1 ms per row on one core, which would add a large share to a batched request on a fast GPU; the vocabulary
+// is split across `threads`, idle once the decode has finished.
+std::vector<float> log_normalizers(const std::vector<const float *> & rows, int32_t n_vocab, int32_t threads) {
+    const int32_t chunks = std::max(1, std::min(threads, n_vocab));
+    std::vector<float> tops(rows.size() * chunks);
+    std::vector<float> sums(rows.size() * chunks);
+    auto work = [&](int32_t chunk) {
+        const int32_t begin = static_cast<int32_t>(static_cast<int64_t>(n_vocab) * chunk / chunks);
+        const int32_t end = static_cast<int32_t>(static_cast<int64_t>(n_vocab) * (chunk + 1) / chunks);
+        for (size_t row = 0; row < rows.size(); ++row) {
+            partial_normalizer(rows[row], begin, end, tops[row * chunks + chunk], sums[row * chunks + chunk]);
+        }
+    };
+    std::vector<std::thread> pool;
+    for (int32_t chunk = 1; chunk < chunks; ++chunk) {
+        pool.emplace_back(work, chunk);
+    }
+    work(0);
+    for (std::thread & thread : pool) {
+        thread.join();
+    }
+    std::vector<float> out;
+    for (size_t row = 0; row < rows.size(); ++row) {
+        const float * top = &tops[row * chunks];
+        const float largest = *std::max_element(top, top + chunks);
+        double total = 0.0;
+        for (int32_t chunk = 0; chunk < chunks; ++chunk) {
+            total += sums[row * chunks + chunk] * std::exp(static_cast<double>(top[chunk] - largest));
+        }
+        out.push_back(largest + static_cast<float>(std::log(total)));
+    }
+    return out;
 }
 
 struct Args {
@@ -125,7 +196,8 @@ int main(int argc, char ** argv) {
     const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
 
     // Tell llav the helper is up before it sends anything; it waits for this line.
-    fprintf(stderr, "llav-readout ready: vocab %d, %d sequences of %d tokens\n", n_vocab, args.seq, args.ctx);
+    fprintf(stderr, "llav-readout ready: protocol 2, vocab %d, %d sequences of %d tokens\n", n_vocab, args.seq,
+            args.ctx);
     fflush(stderr);
 
     std::vector<llama_token> resident;  // the prefix currently in sequence 0
@@ -215,20 +287,28 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        std::vector<float> values;
-        values.reserve(static_cast<size_t>(n_suffix) * n_labels);
+        std::vector<const float *> rows;
         for (int32_t i = 0; i < n_suffix; ++i) {
             const float * logits = llama_get_logits_ith(ctx, output_index[i]);
             if (logits == nullptr) {
-                write_response(4, 0, {});
-                values.clear();
                 break;
             }
-            label_logits(logits, n_vocab, labels, values);
+            rows.push_back(logits);
         }
-        if (!values.empty()) {
-            write_response(0, evaluated, values);
+        if (static_cast<int32_t>(rows.size()) != n_suffix) {
+            write_response(4, 0, {});
+            continue;
         }
+        const std::vector<float> normalizers = log_normalizers(rows, n_vocab, args.threads);
+        std::vector<float> values;
+        values.reserve(static_cast<size_t>(n_suffix) * (n_labels + 1));
+        for (int32_t i = 0; i < n_suffix; ++i) {
+            for (llama_token label : labels) {  // raw: llav's softmax over the declared options cancels any constant
+                values.push_back(label >= 0 && label < n_vocab ? rows[i][label] : -1e30f);
+            }
+            values.push_back(normalizers[i]);
+        }
+        write_response(0, evaluated, values);
     }
 
     llama_free(ctx);

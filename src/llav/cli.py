@@ -11,6 +11,7 @@ import sys
 import tempfile
 
 from . import __version__
+from .calibration import Calibration, CalibrationError
 from .engine import Engine, EngineError, LlamaClient
 from .native import NativeError, NativeReadout
 from .runtime import LlamaProcess
@@ -60,6 +61,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="Questions the helper takes in one pass; larger requests use llama-server")
     parser.add_argument("--state-cache", type=int, default=4,
                         help="Evaluated states kept as slot files for reuse by later requests (0 disables)")
+    parser.add_argument("--calibration", type=Path, metavar="FILE",
+                        help="Temperature calibration from 'scripts/evaluate.py fit'; must match the model")
 
     spawn = parser.add_argument_group("managed llama-server")
     spawn.add_argument("--gguf", type=Path, help="Model file; llav starts llama-server with the required flags")
@@ -96,6 +99,13 @@ def main(argv: list[str] | None = None) -> None:
     if args.native_questions < 1:
         parser.error("--native-questions must be at least 1")
 
+    calibration = None
+    if args.calibration:
+        try:
+            calibration = Calibration.load(args.calibration)
+        except (CalibrationError, OSError) as error:
+            parser.error(str(error))
+
     signal.signal(signal.SIGTERM, _raise_interrupt)
     process = None
     temporary = None
@@ -108,6 +118,9 @@ def main(argv: list[str] | None = None) -> None:
         if args.gguf:
             if not args.gguf.is_file():
                 parser.error(f"No such model file: {args.gguf}")
+            if calibration:  # before the slow start, so a mismatched file fails fast
+                sys.stderr.write(f"checking calibration {calibration.id} against {args.gguf.name}\n")
+                calibration.check_model(args.gguf, args.gguf.name)
             temporary = Path(tempfile.mkdtemp(prefix="llav-"))
             slot_dir = temporary / "slots"
             slot_dir.mkdir()
@@ -124,6 +137,9 @@ def main(argv: list[str] | None = None) -> None:
             if slot_ctx <= 0:
                 parser.error("Could not read the per-slot context size from /props")
             slot_dir, source = args.slot_dir, Path(props.get("model_path") or "model")
+            warning = calibration.check_model(None, source.name) if calibration else None
+            if warning:
+                sys.stderr.write(f"llav: {warning}\n")
         if args.native_readout:
             sys.stderr.write(f"starting the native readout helper ({args.native_readout})\n")
             native = NativeReadout(args.native_readout, args.gguf, [], slot_ctx, args.native_questions)
@@ -135,10 +151,11 @@ def main(argv: list[str] | None = None) -> None:
         aliases = ["llav-latest"] + ([] if args.no_jev_alias else ["jev-latest"])
         health = (lambda: process.alive()) if process else (lambda: True)
         backend = {"runtime": "llama.cpp", "model_file": source.name, "slots": slots, "slot_ctx": slot_ctx,
-                   "prefix_reuse": "native" if engine.native else ("trim" if engine.trims else "slot-file")}
+                   "prefix_reuse": "native" if engine.native else ("trim" if engine.trims else "slot-file"),
+                   "calibration": calibration.id if calibration else None}
         web_ui = WEB_UI.read_bytes() if args.web_ui else None
-        serve(httpd, App(engine, model_id, aliases, args.api_key, backend, health, web_ui))
-    except (EngineError, NativeError, RuntimeError, OSError) as error:
+        serve(httpd, App(engine, model_id, aliases, args.api_key, backend, health, web_ui, calibration))
+    except (CalibrationError, EngineError, NativeError, RuntimeError, OSError) as error:
         sys.stderr.write(f"llav: {error}\n")
         sys.exit(1)
     except KeyboardInterrupt:

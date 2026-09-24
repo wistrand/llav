@@ -38,20 +38,21 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
 
 ## Components
 
-| Unit            | File           | Responsibility                                                            |
-|-----------------|----------------|---------------------------------------------------------------------------|
-| `main`          | `cli.py`       | Parse flags; start `LlamaProcess` or attach via `--llama-url`; cleanup    |
-| `Handler`       | `server.py`    | Routes, bearer auth, body limits, JSON errors, `X-Llav-*` headers         |
-| `document`      | `openapi.py`   | OpenAPI 3.1 spec from the code; served at `/openapi.json`                 |
-| `NativeReadout` | `native.py`    | Optional helper process: one batched pass for all questions               |
-| `parse_request` | `questions.py` | Validate the body into `(state, model, [Question])`                       |
-| `Question`      | `questions.py` | Frozen per-question data: option ids, what the model reads, score legend  |
-| `build_answer`  | `questions.py` | Turn probabilities into a `noul` / `choice` / `score` answer              |
-| `messages`      | `prompt.py`    | System instruction plus JSON payload `{evidence, criterion, options}`     |
-| `LlamaClient`   | `engine.py`    | JSON over HTTP to llama-server; any failure becomes `EngineError`         |
-| `Engine`        | `engine.py`    | Label token ids, encoding, slot pool, readout, shared-state orchestration |
-| `LlamaProcess`  | `runtime.py`   | Spawn llama-server with required flags, wait for `/health`, stop on exit  |
-| web UI          | `webui.html`   | `--web-ui` page at `GET /`; calls the public API like any client          |
+| Unit            | File             | Responsibility                                                            |
+|-----------------|------------------|---------------------------------------------------------------------------|
+| `main`          | `cli.py`         | Parse flags; start `LlamaProcess` or attach via `--llama-url`; cleanup    |
+| `Handler`       | `server.py`      | Routes, bearer auth, body limits, JSON errors, `X-Llav-*` headers         |
+| `document`      | `openapi.py`     | OpenAPI 3.1 spec from the code; served at `/openapi.json`                 |
+| `NativeReadout` | `native.py`      | Optional helper process: one batched pass for all questions               |
+| `Calibration`   | `calibration.py` | Optional per-type temperature from `--calibration`; checks the model      |
+| `parse_request` | `questions.py`   | Validate the body into `(state, model, [Question])`                       |
+| `Question`      | `questions.py`   | Frozen per-question data: option ids, what the model reads, score legend  |
+| `build_answer`  | `questions.py`   | Turn probabilities into a `noul` / `choice` / `score` answer              |
+| `messages`      | `prompt.py`      | System instruction plus JSON payload `{evidence, criterion, options}`     |
+| `LlamaClient`   | `engine.py`      | JSON over HTTP to llama-server; any failure becomes `EngineError`         |
+| `Engine`        | `engine.py`      | Label token ids, encoding, slot pool, readout, shared-state orchestration |
+| `LlamaProcess`  | `runtime.py`     | Spawn llama-server with required flags, wait for `/health`, stop on exit  |
+| web UI          | `webui.html`     | `--web-ui` page at `GET /`; calls the public API like any client          |
 
 ## Request flow
 
@@ -62,7 +63,11 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
    this happens before a slot is taken, so tokenization does not hold capacity.
 5. A slot is taken from `Engine.free` (or `Overloaded` after `queue_timeout`).
 6. `_evaluate_on` scores each question and returns probabilities, `usage` and timing metadata.
-7. `build_answer` shapes each answer; timing goes into `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`.
+7. With `--calibration`, each question's probabilities are divided by its type's temperature in log space
+   (`Calibration.apply`); the answer letter never changes. Candidate mass stays raw.
+8. `build_answer` shapes each answer; timing goes into `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`,
+   each question's candidate mass into `X-Llav-Candidate-Mass`, and the calibration id or `none` into
+   `X-Llav-Calibration`.
 
 ## Shared-state flow
 

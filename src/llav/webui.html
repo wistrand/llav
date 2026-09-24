@@ -133,6 +133,7 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
 .scale .tick { position: absolute; top: 7px; width: 2px; height: 10px; background: var(--line); margin-left: -1px; }
 .scale .mark { position: absolute; top: 4px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--panel); }
 .answer .name-tag { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 8px; }
+.answer .off-options { font-size: 13px; color: var(--bad); margin: 0 0 10px; }
 .failure { border-color: var(--bad); }
 .failure strong { color: var(--bad); }
 .failure ul { margin: 8px 0 0; padding-left: 20px; }
@@ -190,7 +191,7 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--field); borde
       <div id="answers">
         <div class="panel placeholder"><strong>No answers yet</strong>Fill in the text and your questions, then press Ask.</div>
       </div>
-      <p class="note">Percentages show how strongly the model leans towards each option. They are not calibrated:
+      <p class="note" id="note">Percentages show how strongly the model leans towards each option. They are not calibrated:
         check them against examples you know before relying on a threshold.</p>
       <details>
         <summary>For developers: request, response and curl</summary>
@@ -447,7 +448,11 @@ function bars(entries, best) {
   ]));
 }
 
-function renderAnswer(key, answer, title) {
+// Below this share of the model's probability, the options were not what it wanted to say. A display cue,
+// not a measured threshold; see agent_docs/research.md.
+const LOW_MASS = 0.9;
+
+function renderAnswer(key, answer, title, mass) {
   const result = el("div", { class: "result" });
   const card = el("div", { class: "panel answer" }, [el("div", { class: "asked", text: title || key }), result]);
   let top;
@@ -472,12 +477,18 @@ function renderAnswer(key, answer, title) {
     scale.append(el("div", { class: "mark", style: `left: ${(100 * answer.score) / (levels - 1)}%` }));
     card.append(scale, ...bars(entries.map(([i, p]) => [answer.legend[i], p]), answer.legend[bestIndex]));
   }
-  const [word, tone] = sureness(top);
+  const offOptions = Number.isFinite(mass) && mass < LOW_MASS;
+  const [word, tone] = offOptions ? ["No option fits", "low"] : sureness(top);
   result.append(el("span", { class: "sure " + tone, text: word }));
+  if (offOptions) {
+    result.after(el("p", { class: "off-options", text: `The model wanted to answer something else: these options got only `
+      + `${pct(mass)} of its probability, so the percentages below are not reliable.` }));
+  }
   if (answer.type === "score") {
     result.append(el("span", { class: "hint", text: `score ${answer.score.toFixed(2)} of ${Object.keys(answer.legend).length - 1}` }));
   }
-  card.append(el("div", { class: "name-tag", text: key }));
+  const tag = Number.isFinite(mass) ? `${key} · options got ${pct(mass)} of the model's probability` : key;
+  card.append(el("div", { class: "name-tag", text: tag }));
   return card;
 }
 
@@ -542,14 +553,22 @@ async function run() {
     const text = await response.text();
     let body = null;
     try { body = JSON.parse(text); } catch (_) { /* not JSON */ }
+    const massHeader = response.headers.get("X-Llav-Candidate-Mass");
     $("#raw").textContent = "Request\n" + JSON.stringify(request, null, 2) + `\n\nResponse (HTTP ${response.status})\n`
-      + (body ? JSON.stringify(body, null, 2) : text);
+      + (massHeader ? `X-Llav-Candidate-Mass: ${massHeader}\n` : "") + (body ? JSON.stringify(body, null, 2) : text);
     if (!response.ok) {
       const [message, details] = explain(response.status, body, titles);
       showFailure(message, details);
       return;
     }
-    $("#answers").replaceChildren(...Object.entries(body.answers).map(([key, answer]) => renderAnswer(key, answer, titles[key])));
+    const masses = massHeader ? massHeader.split(",").map(Number) : [];
+    const calibration = response.headers.get("X-Llav-Calibration");
+    if (calibration && calibration !== "none") {
+      $("#note").textContent = `Percentages are calibrated with the server's temperature file ${calibration}, fitted on `
+        + "its operator's labelled examples. They are only as reliable as those examples are like this text.";
+    }
+    $("#answers").replaceChildren(...Object.entries(body.answers).map(([key, answer], index) =>
+      renderAnswer(key, answer, titles[key], masses[index])));
     const seconds = Number(response.headers.get("X-Llav-Seconds") || (performance.now() - started) / 1000);
     $("#meta").textContent = `${count} answer${count === 1 ? "" : "s"} in ${seconds.toFixed(2)} s`;
   } catch (error) {

@@ -16,6 +16,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from llav import calibration  # noqa: E402
+from llav.calibration import Calibration, CalibrationError  # noqa: E402
 from llav.cli import main  # noqa: E402
 from llav.engine import ContextTooLong, Engine, EngineError, LlamaClient  # noqa: E402
 from llav.native import NativeError, NativeReadout  # noqa: E402
@@ -106,6 +108,34 @@ class QuestionTest(unittest.TestCase):
         self.assertEqual(choice.option_ids, ("billing", "sales"))
         self.assertEqual(choice.descriptions, ("billing: Payments", "sales"))
         self.assertEqual(score.legend, ("Calm", '{"level": "Angry"}'))
+
+    def test_letter_keys_sit_at_their_own_answer_letter(self):
+        _, _, (question,) = parse_request(request({"c": {
+            "type": "choice", "instructions": "Which candidate?",
+            "criteria": {"B": "Candidate B", "insufficient": "Neither", "A": "Candidate A"},
+        }}))
+        self.assertEqual(question.option_ids, ("A", "B", "insufficient"))
+        self.assertEqual(question.descriptions, ("A: Candidate A", "B: Candidate B", "insufficient: Neither"))
+        answer = build_answer(question, [0.1, 0.7, 0.2])
+        self.assertEqual(answer["choice"], "B")
+        # The response keeps the caller's order.
+        self.assertEqual(list(answer["probabilities"]), ["B", "insufficient", "A"])
+        self.assertEqual(answer["probabilities"]["A"], 0.1)
+
+    def test_letter_alignment_leaves_other_keys_alone(self):
+        cases = [
+            ({"x": None, "b": None, "y": None}, ("x", "b", "y")),  # lowercase b is already at B
+            ({"yes": None, "a": None}, ("a", "yes")),
+            ({"Z": None, "A": None}, ("A", "Z")),  # Z has no slot among two options
+            ({"A": None, "a": None, "q": None}, ("A", "a", "q")),  # one key per letter
+            ({"billing": None, "sales": None}, ("billing", "sales")),
+        ]
+        for criteria, expected in cases:
+            with self.subTest(criteria=criteria):
+                _, _, (question,) = parse_request(request({"c": {
+                    "type": "choice", "instructions": "q", "criteria": criteria}}))
+                self.assertEqual(question.option_ids, expected)
+                self.assertEqual(question.declared, () if expected == tuple(criteria) else tuple(criteria))
 
     def test_validation_errors_carry_field_path(self):
         cases = [
@@ -199,6 +229,17 @@ class EngineTest(unittest.TestCase):
         self.assertAlmostEqual(results[0][0], expected)
         self.assertNotIn("/slots/0?action=save", client.calls)
         self.assertEqual((usage["output_tokens"], meta["shared_state_tokens"]), (0, 0))
+
+    def test_candidate_mass_sums_the_declared_labels_over_the_vocabulary(self):
+        client = FakeClient(scores={"A": -0.5, "B": -2.5, "C": -3.0})
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "choice", "instructions": "q2", "criteria": {"x": None, "y": None, "z": None}},
+        }))
+        _, _, meta = self.engine(client).evaluate({"ticket": "x"}, questions)
+        # The noul declares only A and B, so the mass the model put on C is not counted.
+        self.assertAlmostEqual(meta["candidate_mass"][0], math.exp(-0.5) + math.exp(-2.5))
+        self.assertAlmostEqual(meta["candidate_mass"][1], math.exp(-0.5) + math.exp(-2.5) + math.exp(-3.0))
 
     def test_questions_share_a_restored_state(self):
         client = FakeClient()
@@ -418,12 +459,13 @@ class FakeEngine:
             raise self.error
         return [[0.75, 0.25] for _ in questions], {"input_tokens": 1, "output_tokens": 0}, {
             "seconds": 0.0, "shared_state_tokens": 0, "state_cache": "off",
+            "candidate_mass": [0.99876 for _ in questions],
         }
 
 
 STUB_HELPER = """#!/usr/bin/env python3
 import struct, sys
-sys.stderr.write("llav-readout ready: stub\\n"); sys.stderr.flush()
+sys.stderr.write("llav-readout ready: protocol 2, stub\\n"); sys.stderr.flush()
 fail = "--fail" in sys.argv
 while True:
     head = sys.stdin.buffer.read(16)
@@ -438,8 +480,10 @@ while True:
         total += count
     if fail:
         sys.stdout.buffer.write(b"LLVA" + struct.pack("<2i", 3, 0)); sys.stdout.buffer.flush(); continue
-    # Label 0 gets the highest log-probability, so every answer is the first option.
-    values = [(-0.1 if i % n_labels == 0 else -3.0) for i in range(n_suffix * n_labels)]
+    # Label 0 gets the highest log-probability, so every answer is the first option. Each suffix ends with
+    # its log normalizer, 0 here, so the logits are already log-probabilities.
+    row = [-0.1] + [-3.0] * (n_labels - 1) + [0.0]
+    values = row * n_suffix
     sys.stdout.buffer.write(b"LLVA" + struct.pack("<2i", 0, total) +
                             struct.pack("<%df" % len(values), *values))
     sys.stdout.buffer.flush()
@@ -460,11 +504,32 @@ class NativeReadoutTest(unittest.TestCase):
 
     def test_answers_every_suffix_in_one_call(self):
         readout = self.helper()
-        logprobs, evaluated = readout.evaluate([1, 2, 3], [[4, 5], [6, 7, 8]])
+        logprobs, normalizers, evaluated = readout.evaluate([1, 2, 3], [[4, 5], [6, 7, 8]])
         self.assertEqual(len(logprobs), 2)
+        self.assertEqual(normalizers, [0.0, 0.0])
         self.assertEqual([len(row) for row in logprobs], [2, 2])
         self.assertEqual(evaluated, 5)
         self.assertGreater(logprobs[0][0], logprobs[0][1])
+
+    def test_refuses_a_helper_built_for_another_protocol(self):
+        script = Path(tempfile.mkdtemp()) / "old.py"
+        script.write_text("#!/usr/bin/env python3\nimport sys\nsys.stderr.write('llav-readout ready: vocab 5\\n')\n"
+                          "sys.stderr.flush()\nsys.stdin.read()\n")
+        script.chmod(0o755)
+        with self.assertRaises(NativeError):
+            NativeReadout(str(script), Path("model.gguf"), [10, 20], 4096)
+
+    def test_engine_reports_candidate_mass_from_the_helper(self):
+        readout = self.helper()
+        engine = Engine(FakeClient(), 1, 100_000, Path(tempfile.mkdtemp()), queue_timeout=1, native=readout)
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "noul", "instructions": "q2"},
+        }))
+        _, _, meta = engine.evaluate({"ticket": "x"}, questions)
+        self.assertIs(engine.native, readout)
+        for mass in meta["candidate_mass"]:
+            self.assertAlmostEqual(mass, math.exp(-0.1) + math.exp(-3.0), places=6)
 
     def test_refuses_more_questions_than_it_was_started_for(self):
         readout = self.helper()
@@ -557,6 +622,8 @@ class ServerTest(unittest.TestCase):
         status, headers, data = self.exchange(self.serve(), self.post_head(str(len(self.BODY))), self.BODY)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["answers"]["a"], {"type": "noul", "noul": 0.75})
+        self.assertEqual(headers["x-llav-candidate-mass"], "0.9988")
+        self.assertEqual(headers["x-llav-calibration"], "none")
         self.assertFalse(headers["closed"])
 
     def test_bad_content_length_is_rejected_and_closes(self):
@@ -673,6 +740,176 @@ class CliTest(unittest.TestCase):
                 main(["--gguf", model.name, "--port", str(busy.getsockname()[1])])
             self.assertEqual(caught.exception.code, 1)
             process.assert_not_called()
+
+    def test_mismatched_calibration_fails_before_the_model_loads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "model.gguf"
+            model.write_bytes(b"weights")
+            path = write_calibration(Path(directory), sha256="0" * 64)
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            with mock.patch("llav.cli.LlamaProcess") as process, mock.patch("sys.stderr"), \
+                    self.assertRaises(SystemExit) as caught:
+                main(["--gguf", str(model), "--port", str(port), "--calibration", str(path)])
+            self.assertEqual(caught.exception.code, 1)
+            process.assert_not_called()
+
+
+def write_calibration(directory: Path, sha256: str, **changes) -> Path:
+    document = {"format": calibration.FORMAT, "prompt_version": calibration.PROMPT_VERSION,
+                "model": {"file": "model.gguf", "sha256": sha256}, "temperature": {"noul": 2.0}}
+    document.update(changes)
+    path = directory / "calibration.json"
+    path.write_text(json.dumps(document))
+    return path
+
+
+class CalibrationTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.model = self.directory / "model.gguf"
+        self.model.write_bytes(b"weights")
+
+    def test_temperature_softens_without_changing_the_answer(self):
+        self.assertEqual(calibration.apply([0.8, 0.2], 1.0), [0.8, 0.2])
+        softened = calibration.apply([0.8, 0.2], 2.0)
+        self.assertAlmostEqual(softened[0], 2 / 3)  # sqrt(0.8) : sqrt(0.2) is 2 : 1
+        sharpened = calibration.apply([0.6, 0.3, 0.1], 0.5)
+        self.assertEqual(max(range(3), key=sharpened.__getitem__), 0)
+        self.assertGreater(sharpened[0], 0.6)
+        self.assertAlmostEqual(sum(calibration.apply([1.0, 0.0], 3.0)), 1.0)
+
+    def test_loads_and_checks_the_model(self):
+        loaded = Calibration.load(write_calibration(self.directory, calibration.file_sha256(self.model)))
+        self.assertEqual(loaded.temperatures, {"noul": 2.0})
+        self.assertEqual(len(loaded.id), 12)
+        self.assertIsNone(loaded.check_model(self.model, self.model.name))
+        self.assertIn("not verified", loaded.check_model(None, "/models/model.gguf"))
+        with self.assertRaises(CalibrationError):
+            loaded.check_model(None, "other.gguf")
+        other = self.directory / "other.gguf"
+        other.write_bytes(b"other weights")
+        with self.assertRaises(CalibrationError):
+            loaded.check_model(other, other.name)
+        self.assertEqual(loaded.apply("choice", [0.8, 0.2]), [0.8, 0.2])  # types without a fit keep T = 1
+
+    def test_rejects_malformed_or_foreign_files(self):
+        sha = "0" * 64
+        for changes in ({"format": "other"}, {"prompt_version": "direct-options-v2"}, {"model": {"file": "x"}},
+                        {"temperature": {"noul": 0}}, {"temperature": {"yesno": 1.5}}, {"temperature": {}},
+                        {"temperature": {"noul": True}}):
+            with self.subTest(changes=changes), self.assertRaises(CalibrationError):
+                Calibration.load(write_calibration(self.directory, sha, **changes))
+
+    def test_server_applies_it_and_names_it(self):
+        loaded = Calibration.load(write_calibration(self.directory, "0" * 64))
+        server = ServerTest("run")
+        app = App(FakeEngine(), "llav-test", ["llav-latest"], None, {}, calibration=loaded)
+        handler = type("Quiet", (Handler,), {"app": app, "log_message": lambda *args: None})
+        httpd = Server(("127.0.0.1", 0), handler)
+        start(httpd)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        body = ServerTest.BODY
+        status, headers, data = server.exchange(httpd.server_address[1], server.post_head(str(len(body))), body)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["x-llav-calibration"], loaded.id)
+        # FakeEngine answers 0.75; T = 2 gives sqrt(3) : 1.
+        self.assertAlmostEqual(json.loads(data)["answers"]["a"]["noul"], math.sqrt(3) / (1 + math.sqrt(3)))
+
+
+def load_script(name: str):
+    """Import a script from scripts/ as a module; they are not a package."""
+    import importlib.util  # noqa: PLC0415 - only these tests need it
+    path = Path(__file__).resolve().parents[1] / "scripts" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class EvaluateMetricsTest(unittest.TestCase):
+    evaluate = load_script("evaluate")
+
+    def test_perfect_confident_answers(self):
+        records = [{"probs": {"a": 1.0, "b": 0.0}, "label": "a"}] * 4
+        result = self.evaluate.metrics(records)
+        self.assertEqual((result["accuracy"], result["brier"], result["ece"]), (1.0, 0.0, 0.0))
+        self.assertEqual(result["coverage"][0.01], (1.0, 1.0))
+
+    def test_ece_and_brier_of_an_overconfident_model(self):
+        # Always 0.9 sure, right half the time: ECE is the 0.4 gap.
+        records = [{"probs": {"a": 0.9, "b": 0.1}, "label": label} for label in ("a", "b")]
+        result = self.evaluate.metrics(records)
+        self.assertAlmostEqual(result["ece"], 0.4)
+        self.assertAlmostEqual(result["brier"], ((0.1 ** 2 * 2) + (0.9 ** 2 * 2)) / 2)
+        self.assertAlmostEqual(result["nll"], (-math.log(0.9) - math.log(0.1)) / 2)
+
+    def test_coverage_answers_the_confident_ones_and_never_splits_a_tie(self):
+        confidence = [0.99, 0.95, 0.9, 0.9, 0.6]
+        correct = [True, True, True, False, False]
+        self.assertEqual(self.evaluate.coverage(confidence, correct, 0.0), (0.4, 0.95))
+        self.assertEqual(self.evaluate.coverage(confidence, correct, 0.25), (0.8, 0.9))
+        self.assertEqual(self.evaluate.coverage([0.5], [False], 0.05), (0.0, None))
+
+    def test_rotations_map_answers_back_to_original_options(self):
+        choice = {"type": "choice", "instructions": "q", "criteria": {"x": "1", "y": None, "z": "3"}}
+        variants = self.evaluate.rotations(choice, 26)
+        self.assertEqual([list(q["criteria"]) for q, _ in variants], [["x", "y", "z"], ["y", "z", "x"], ["z", "x", "y"]])
+        score = {"type": "score", "instructions": "q", "criteria": ["low", "mid", "high"]}
+        rotated, order = self.evaluate.rotations(score, 26)[1]
+        self.assertEqual(rotated["criteria"], ["mid", "high", "low"])
+        answer = {"type": "score", "probabilities": {"0": 0.7, "1": 0.2, "2": 0.1}}  # "mid" displayed first
+        self.assertEqual(self.evaluate.unrotate(answer, order), {"1": 0.7, "2": 0.2, "0": 0.1})
+        self.assertEqual(len(self.evaluate.rotations(choice, 2)), 2)
+
+    def test_fit_recovers_the_temperature_that_made_a_model_overconfident(self):
+        # Right 70% of the time, but reports 0.7 sharpened with T = 0.5: the fit should undo it with T = 2.
+        reported = calibration.apply([0.7, 0.3], 0.5)
+        records = [{"type": "choice", "probs": {"a": reported[0], "b": reported[1]}, "label": label}
+                   for label in "a" * 7 + "b" * 3]
+        self.assertAlmostEqual(self.evaluate.fit_temperature(records, calibration.apply), 2.0, places=3)
+
+    def test_fit_refuses_temperatures_it_cannot_pin_down(self):
+        right = [{"type": "choice", "probs": {"a": 0.9, "b": 0.1}, "label": "a"}] * 50
+        temperatures, skipped = self.evaluate.fit_types(right, calibration.apply)
+        self.assertEqual(temperatures, {})
+        self.assertIn("wrong answers", skipped["choice"])
+        few = right[:10]
+        self.assertIn("fewer than", self.evaluate.fit_types(few, calibration.apply)[1]["choice"])
+
+    def fit_records(self, directory: Path, model_file: str | None) -> Path:
+        reported = calibration.apply([0.7, 0.3], 0.5)
+        rows = [{"id": f"q{i}", "source": "s", "type": "choice", "label": "a" if i % 10 < 7 else "b",
+                 "probs": {"a": reported[0], "b": reported[1]}, "model_file": model_file} for i in range(200)]
+        path = directory / "predictions.jsonl"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        return path
+
+    def test_fit_writes_a_file_llav_loads_and_refuses_another_models_predictions(self):
+        directory = Path(tempfile.mkdtemp())
+        model = directory / "model.gguf"
+        model.write_bytes(b"weights")
+        out = directory / "calibration.json"
+        with mock.patch("sys.stdout"):
+            self.evaluate.main(["fit", str(self.fit_records(directory, "model.gguf")), "--gguf", str(model),
+                                "--out", str(out)])
+        loaded = Calibration.load(out)
+        self.assertAlmostEqual(loaded.temperatures["choice"], 2.0, places=2)
+        self.assertIsNone(loaded.check_model(model, model.name))
+        with mock.patch("sys.stdout"), self.assertRaises(SystemExit) as caught:
+            self.evaluate.main(["fit", str(self.fit_records(directory, "other.gguf")), "--gguf", str(model),
+                                "--out", str(directory / "other.json")])
+        self.assertIn("not model.gguf", str(caught.exception.code))
+        self.assertFalse((directory / "other.json").exists())
+
+    def test_geometric_mean_cancels_a_constant_position_preference(self):
+        # The same judgement seen through a bias towards whichever option is displayed first.
+        rows = [{"a": 0.8, "b": 0.2}, {"a": 0.5, "b": 0.5}]
+        combined = self.evaluate.geometric_mean(rows)
+        self.assertAlmostEqual(sum(combined.values()), 1.0)
+        self.assertAlmostEqual(combined["a"] / combined["b"], math.sqrt((0.8 / 0.2) * (0.5 / 0.5)))
 
 
 if __name__ == "__main__":

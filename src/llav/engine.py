@@ -243,7 +243,8 @@ class Engine:
         head, _, _ = self._split(messages(state, "prefix boundary placeholder", ["Yes", "No"]))
         return self.client.tokenize(head) + self.client.tokenize(evidence_opening(state), special=False)[:-1]
 
-    def _readout(self, ids: list[int], count: int, slot: int, cache: bool) -> tuple[list[float], int]:
+    def _readout(self, ids: list[int], count: int, slot: int, cache: bool) -> tuple[list[float], float, int]:
+        """Option probabilities, their candidate mass, and the tokens evaluated."""
         response = self.client.post("/completion", {
             "prompt": ids, "n_predict": 1, "temperature": -1, "n_probs": self.n_probs,
             "cache_prompt": cache, "id_slot": slot,
@@ -257,7 +258,11 @@ class Engine:
         # A label outside the top n_probs has at most the smallest returned logprob; use that bound.
         floor = min(top.values())
         logprobs = [floor if value is None else value for value in found]
-        return softmax(logprobs), int((response.get("timings") or {}).get("prompt_n") or 0)
+        # The logprobs are normalized over the vocabulary, so their sum is the share the model gave the
+        # declared options before the softmax over them discards the rest. With a floored label it is an
+        # upper bound.
+        mass = min(1.0, sum(math.exp(value) for value in logprobs))
+        return softmax(logprobs), mass, int((response.get("timings") or {}).get("prompt_n") or 0)
 
     def _cache_name(self, prefix: list[int]) -> str:
         digest = hashlib.sha256(b"".join(token.to_bytes(4, "big") for token in prefix)).hexdigest()[:32]
@@ -318,16 +323,23 @@ class Engine:
         if native is None or not prefix or len(encoded) > native.max_questions:
             return None
         try:
-            logprobs, evaluated = native.evaluate(prefix, [ids[len(prefix):] for ids in encoded])
+            logits, normalizers, evaluated = native.evaluate(prefix, [ids[len(prefix):] for ids in encoded])
         except NativeError as error:
             self.native = None  # one broken helper must not break every later request
             print(f"llav: native readout disabled: {error}", file=sys.stderr)
             return None
-        results = [softmax(values[:count]) for values, count in zip(logprobs, counts)]
-        return results, evaluated
+        results = [softmax(values[:count]) for values, count in zip(logits, counts)]
+        masses = [min(1.0, sum(math.exp(value - norm) for value in values[:count]))
+                  for values, norm, count in zip(logits, normalizers, counts)]
+        return results, masses, evaluated
 
     def evaluate(self, state, questions: list[Question]) -> tuple[list[list[float]], dict, dict]:
-        """Score every question against `state`; returns per-question probabilities, usage, and timing."""
+        """Score every question against `state`; returns per-question probabilities, usage, and meta.
+
+        `meta["candidate_mass"]` is, per question, the vocabulary probability on its declared labels: near 1
+        when the model answered with an option letter, low when it wanted another token and the softmax over
+        the options is noise.
+        """
         counts = [len(question.descriptions) for question in questions]
         prefix, encoded = self.encode_all(state, questions)
         # One question is worth a shared prefix only when the state can be cached for a later request:
@@ -349,21 +361,23 @@ class Engine:
         started = time.perf_counter()
         computed = 0
         results = []
+        masses = []
         shared = bool(prefix) and all(ids[: len(prefix)] == prefix and len(ids) > len(prefix) for ids in encoded)
         cached = False
         native = self._evaluate_native(prefix, encoded, counts) if shared else None
         if native is not None:
-            results, computed = native
+            results, masses, computed = native
             # The helper keeps the last state resident, so a repeat evaluates only the questions.
             cached = computed < len(prefix)
             usage = {"input_tokens": computed, "output_tokens": 0}
             meta = {"shared_state_tokens": len(prefix), "seconds": time.perf_counter() - started,
-                    "state_cache": "hit" if cached else "miss"}
+                    "state_cache": "hit" if cached else "miss", "candidate_mass": masses}
             return results, usage, meta
         if not shared:
             for ids, count in zip(encoded, counts):
-                probabilities, n = self._readout(ids, count, slot, cache=False)
+                probabilities, mass, n = self._readout(ids, count, slot, cache=False)
                 results.append(probabilities)
+                masses.append(mass)
                 computed += n
         else:
             name, evaluated = self._load_prefix(slot, prefix)
@@ -374,13 +388,15 @@ class Engine:
                     # A trimming backend rolls back to the prefix by itself; the rest need the slot file.
                     if index and not self.trims:
                         self.client.post(f"/slots/{slot}?action=restore", {"filename": name})
-                    probabilities, n = self._readout(ids, count, slot, cache=True)
+                    probabilities, mass, n = self._readout(ids, count, slot, cache=True)
                     results.append(probabilities)
+                    masses.append(mass)
                     computed += n
             finally:
                 if name and not self.state_cache:
                     self._drop(name)
         usage = {"input_tokens": computed, "output_tokens": 0}
         meta = {"shared_state_tokens": len(prefix) if shared else 0, "seconds": time.perf_counter() - started,
-                "state_cache": ("hit" if cached else "miss") if shared and self.state_cache else "off"}
+                "state_cache": ("hit" if cached else "miss") if shared and self.state_cache else "off",
+                "candidate_mass": masses}
         return results, usage, meta

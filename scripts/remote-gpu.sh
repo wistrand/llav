@@ -91,7 +91,7 @@ fi
 
 if [[ -n "$NATIVE" ]]; then
   # Built here against this llama.cpp: the helper uses its C API, so both must come from one version.
-  g++ -O2 -std=c++17 -o /root/llav-readout /root/llav/native/llav-readout.cpp \
+  g++ -O2 -std=c++17 -pthread -o /root/llav-readout /root/llav/native/llav-readout.cpp \
     -I/root/llama.cpp/include -I/root/llama.cpp/ggml/include \
     -L/root/llama.cpp/build/bin -lllama -Wl,-rpath,/root/llama.cpp/build/bin
   LLAV_ARGS="$LLAV_ARGS --native-readout /root/llav-readout"

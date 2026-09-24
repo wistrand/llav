@@ -120,6 +120,9 @@ probabilities of the answer labels straight from the logits. Nothing is generate
 - **A `noul`'s `criteria` are repeated in the criterion text**, because `Yes` and `No` say nothing on their
   own and some models read only the criterion. Writing the rule in `criteria`, in `instructions`, or in
   both works the same; `choice` and `score` are untouched, since there the descriptions are the options.
+- **A `choice` key that is a single letter is shown to the model at that answer letter**, so keys `B`,
+  `insufficient`, `A` reach it as A, B, C. Otherwise the model confuses option names with answer letters.
+  The answer keeps your keys and their order.
 - **`score`** is the probability-weighted level index, `Σ i·p_i` with 0-based levels, so it can land between
   levels.
 - **`confidence`** is `1 − H(p)/ln(n)`: 1 when all the probability is on one option, 0 when it is uniform.
@@ -128,9 +131,17 @@ probabilities of the answer labels straight from the logits. Nothing is generate
   `output_tokens` is always 0.
 - Errors return `{"detail": ...}`: **422** for anything the caller can fix (a malformed body, an unknown
   model, a prompt too long for a slot, with the field path), **401** for a bad key, **413** over 8 MiB,
-  **529** when every slot stayed busy for `--queue-timeout`, **500** when the backend fails.
+  **529** when every slot stayed busy for `--queue-timeout`, **500** when the backend fails. A 400, 401, 404,
+  411 or 413 is sent before the body is read and closes the connection, so a client still uploading a large
+  body may see a broken pipe instead of the status. Check the size before sending rather than relying on
+  reading the 413.
 - Every response carries `X-Llav-Seconds`, `X-Llav-Shared-State-Tokens` and `X-Llav-State-Cache`
   (`hit`, `miss` or `off`).
+- `X-Llav-Calibration` is `none`, or the id of the temperature file loaded with `--calibration`.
+- `X-Llav-Candidate-Mass` lists, per question in answer order, the probability the model gave the option
+  letters over its whole vocabulary, for example `0.9991,0.9874`. Well below 1 means the model wanted to
+  say something else and the answer's probabilities are not worth reading. Near 1 says nothing about
+  whether the answer is right.
 
 The other endpoints: **`GET /v1/models`** (id, aliases, backend details), **`GET /openapi.json`** (the full
 contract, built from the code that serves it, also committed as [openapi.json](openapi.json)),
@@ -177,6 +188,11 @@ estimates for other hardware and what a text-generating baseline would cost are 
 
 - **Model and accuracy.** A 4B open model with an untrained readout. Probabilities are uncalibrated
   conditional scores: calibrate on your own labelled data before thresholding on them.
+  `scripts/evaluate.py score URL FILE.jsonl` reports accuracy, calibration error and how much can be
+  answered automatically at a given error rate on such data; its docstring gives the file format.
+  `scripts/evaluate.py fit` turns those predictions into a temperature file that `--calibration` loads;
+  answers then carry calibrated probabilities and `X-Llav-Calibration` names the file. It is fitted to one
+  model file and one workload, and llav ships none.
 - **Choice size.** llav allows at most 26 options (single-token letters `A`–`Z`); Jev allows 255.
 - **Confidence formula.** Jev's formula is unpublished, so llav uses its own (see above).
 - **Usage and limits.** Token counts follow llav's evaluation, not Jev's billing. There are no
@@ -189,7 +205,7 @@ estimates for other hardware and what a text-generating baseline would cost are 
 ```
 llav --gguf FILE [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
      [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
-     [--native-readout BIN] [--native-questions 16]
+     [--native-readout BIN] [--native-questions 16] [--calibration FILE]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
 
 llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own llama-server

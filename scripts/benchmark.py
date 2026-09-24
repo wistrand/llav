@@ -3,11 +3,14 @@
 
     scripts/benchmark.py accuracy http://127.0.0.1:8080
     scripts/benchmark.py timing   http://127.0.0.1:8080
+    scripts/benchmark.py fetch    ~/llav-articles          # once, downloads from Wikipedia
+    scripts/benchmark.py articles http://127.0.0.1:8080 ~/llav-articles
     PYTHONPATH=src scripts/benchmark.py phases http://127.0.0.1:8089 /tmp/llav-XXXX/slots
 
-`accuracy` covers four checks: the easy and hard question sets, whether reversing a choice's options
-changes its answer, and whether the model reads a decision rule written into `criteria` rather than
-`instructions`. `accuracy` and `timing` talk to llav. `phases` talks to llama-server directly, so it needs that server's
+`accuracy` covers five checks: the easy and hard question sets, whether reversing a choice's options
+changes its answer, whether the model reads a decision rule written into `criteria` rather than
+`instructions`, and whether candidate mass (`X-Llav-Candidate-Mass`) drops on a question no option fits. The
+question sets also report the lowest and median candidate mass. `accuracy` and `timing` talk to llav. `phases` talks to llama-server directly, so it needs that server's
 URL and its --slot-save-path; it disturbs slot 0, so do not point it at a server that is serving.
 
 The numbers in agent_docs/research.md come from these three commands. Question sets are small on purpose:
@@ -19,8 +22,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+import statistics
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -141,13 +148,27 @@ def certainty(answer: dict) -> float:
     return answer["noul"] if answer["type"] == "noul" else answer["probabilities"][answer["choice"]]
 
 
+def candidate_mass(headers: dict, answers: dict) -> dict:
+    """Per answer key, the share of the vocabulary the model put on the declared option letters."""
+    values = headers.get("X-Llav-Candidate-Mass")
+    return dict(zip(answers, map(float, values.split(",")))) if values else {}
+
+
+def mass_summary(masses: list[float]) -> str:
+    if not masses:
+        return "candidate mass not reported (llav predates X-Llav-Candidate-Mass)"
+    return f"candidate mass min {min(masses):.4f}, median {statistics.median(masses):.4f}"
+
+
 def score(url: str, cases: list, label: str) -> list[str]:
     """Answer each case and report the misses, with how sure the model was of the wrong answer."""
     correct = total = 0
-    misses = []
+    misses, masses = [], []
     for state, items in cases:
-        body, _ = ask(url, state, {key: question for key, question, _ in items})
+        body, headers = ask(url, state, {key: question for key, question, _ in items})
         answers = body["answers"]
+        mass = candidate_mass(headers, answers)
+        masses += mass.values()
         for key, _, expected in items:
             answer = answers[key]
             total += 1
@@ -155,8 +176,9 @@ def score(url: str, cases: list, label: str) -> list[str]:
                 correct += 1
             else:
                 misses.append(f"  {label} {state[:44]!r} {key}: {picked(answer)} at "
-                              f"{certainty(answer):.2f}, expected {expected}")
-    print(f"{label}: {correct}/{total}")
+                              f"{certainty(answer):.2f}, expected {expected}"
+                              + (f", candidate mass {mass[key]:.4f}" if key in mass else ""))
+    print(f"{label}: {correct}/{total}, {mass_summary(masses)}")
     return misses
 
 
@@ -214,10 +236,34 @@ def rule_placement(url: str) -> None:
         print(f"  {answer['noul']:.3f}  {label}")
 
 
+# A question none of the options answers. Qwen3.5-4B put 0.57 of its probability on the two letters and the
+# rest on tokens like `NA` and `Neither` (agent_docs/research.md); the softmax over the letters alone still
+# says red at 0.79. The drop is what candidate mass exists to show.
+NO_FIT_STATE = ("Customer: Our payouts have been failing for three days and we are losing money. Fix this now "
+                "or we cancel.")
+NO_FIT = {
+    "fits": choice("Which team should handle it?", {"billing": "Payments and payouts",
+                                                    "technical": "Bugs and outages", "sales": None}),
+    "no_fit": choice("What colour is the customer's car?", {"red": None, "blue": None}),
+}
+
+
+def no_fit(url: str) -> None:
+    """Candidate mass should stay near 1 on a question the options answer and drop on one they do not."""
+    body, headers = ask(url, NO_FIT_STATE, NO_FIT)
+    mass = candidate_mass(headers, body["answers"])
+    if not mass:
+        print("no fit: " + mass_summary([]))
+        return
+    print(f"no fit: candidate mass {mass['fits']:.4f} when an option fits, {mass['no_fit']:.4f} when none does "
+          f"(answered {body['answers']['no_fit']['choice']} at {certainty(body['answers']['no_fit']):.2f})")
+
+
 def accuracy(args) -> None:
     misses = score(args.url, EASY, "easy") + score(args.url, HARD, "hard")
     order_bias(args.url)
     rule_placement(args.url)
+    no_fit(args.url)
     for miss in misses:
         print(miss)
 
@@ -235,6 +281,100 @@ def timing(args) -> None:
               f"cache={headers.get('X-Llav-State-Cache', '?'):4} "
               f"state={headers.get('X-Llav-Shared-State-Tokens', '?')} tokens  "
               f"evaluated={answers['usage']['input_tokens']}")
+
+
+# Real prose instead of hand-written sentences: Wikipedia articles whose subject is unambiguous. Labels are
+# by hand; "Chess" and "Go" are filed under sport, which is arguable, and Wikipedia text changes over time,
+# so a miss is worth reading before it is treated as a regression.
+ARTICLES = {
+    "Ada Lovelace": "person", "Alan Turing": "person", "Hedy Lamarr": "person", "Frida Kahlo": "person",
+    "Marie Curie": "person", "Ludwig van Beethoven": "person",
+    "Kyoto": "place", "Reykjavík": "place", "Venice": "place", "Sahara": "place", "Mount Everest": "place",
+    "Blue whale": "animal", "Emperor penguin": "animal", "Octopus": "animal", "Honey bee": "animal",
+    "Basketball": "sport", "Chess": "sport", "Cricket": "sport", "Go (game)": "sport",
+    "Photosynthesis": "science", "Plate tectonics": "science", "Black hole": "science", "CRISPR": "science",
+    "Apollo 11": "event", "French Revolution": "event", "Chernobyl disaster": "event",
+    "Jazz": "music", "Hip-hop": "music", "Fado": "music",
+}
+CATEGORIES = {"person": "A person, their life and work", "place": "A city, region or country",
+              "animal": "An animal or species", "sport": "A sport or game",
+              "science": "A scientific concept or natural process", "event": "A historical event",
+              "music": "A musical genre or musical tradition"}
+ARTICLE_QUESTIONS = {
+    "category": {"type": "choice", "instructions": "What is this text about?", "criteria": CATEGORIES},
+    "person": {"type": "noul", "instructions": "Is the subject of this text a person?"},
+    # The same rule with a vague criterion, to check the criteria fold on real text.
+    "person_via_criteria": {"type": "noul", "instructions": "does it apply",
+                            "criteria": {"true": "the subject of the text is a person"}},
+    "technical": {"type": "score", "instructions": "How technical is the language?",
+                  "criteria": ["Plain", "Somewhat technical", "Highly technical"]},
+}
+ARTICLE_CHARS = 10000  # about 2,500 tokens, so the article and its questions fit one slot
+
+
+def fetch(args) -> None:
+    """Download the article set as plain text. Wikipedia rate-limits bursts, so this backs off and waits."""
+    directory = Path(args.dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    api = ("https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&redirects=1"
+           "&format=json&titles=")
+    for title in ARTICLES:
+        target = directory / (title.replace(" ", "_") + ".txt")
+        if target.exists():
+            continue
+        request = urllib.request.Request(api + urllib.parse.quote(title),
+                                         headers={"User-Agent": "llav-benchmark (local evaluation)"})
+        for attempt in range(5):
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    pages = json.load(response)["query"]["pages"]
+                break
+            except urllib.error.HTTPError as error:
+                if error.code != 429 or attempt == 4:
+                    raise
+                time.sleep(5 * (attempt + 1))
+        target.write_text(next(iter(pages.values())).get("extract", ""))
+        print(f"{title}: {len(target.read_text())} characters")
+        time.sleep(2)
+
+
+def articles(args) -> None:
+    """One request per article, four questions sharing the state, against hand labels."""
+    directory = Path(args.dir)
+    by_file = {title.replace(" ", "_"): (title, category) for title, category in ARTICLES.items()}
+    hits = {"category": 0, "person": 0, "person_via_criteria": 0}
+    total, wall, engine, sizes, misses, masses = 0, [], [], [], [], []
+    for path in sorted(directory.glob("*.txt")):
+        if path.stem not in by_file:
+            continue
+        title, category = by_file[path.stem]
+        started = time.perf_counter()
+        body, headers = ask(args.url, path.read_text()[:ARTICLE_CHARS], ARTICLE_QUESTIONS)
+        wall.append(time.perf_counter() - started)
+        engine.append(float(headers["X-Llav-Seconds"]))
+        sizes.append(int(headers["X-Llav-Shared-State-Tokens"]))
+        answers, total = body["answers"], total + 1
+        masses += candidate_mass(headers, answers).values()
+        is_person = category == "person"
+        checks = {"category": answers["category"]["choice"] == category,
+                  "person": (answers["person"]["noul"] > 0.5) == is_person,
+                  "person_via_criteria": (answers["person_via_criteria"]["noul"] > 0.5) == is_person}
+        for name, ok in checks.items():
+            hits[name] += ok
+            if not ok:
+                misses.append(f"  {title}: {name} wrong (category said "
+                              f"{answers['category']['choice']}, person {answers['person']['noul']:.3f}, "
+                              f"via criteria {answers['person_via_criteria']['noul']:.3f})")
+    if not total:
+        print(f"no articles in {directory}; run: scripts/benchmark.py fetch {directory}")
+        return
+    for name in hits:
+        print(f"{name}: {hits[name]}/{total}")
+    print(mass_summary(masses))
+    print(f"states {min(sizes)}-{max(sizes)} tokens; per request {statistics.median(engine):.2f} s on the "
+          f"server (X-Llav-Seconds), {statistics.median(wall):.2f} s including the network")
+    for miss in misses:
+        print(miss)
 
 
 def phases(args) -> None:
@@ -292,6 +432,13 @@ def main(argv=None) -> None:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("url", help="llav base URL, for example http://127.0.0.1:8080")
         command.set_defaults(run=function)
+    command = commands.add_parser("articles", help="Real Wikipedia articles against hand labels")
+    command.add_argument("url", help="llav base URL")
+    command.add_argument("dir", help="Directory of article text files, from the fetch command")
+    command.set_defaults(run=articles)
+    command = commands.add_parser("fetch", help="Download the article set (needs network, not llav)")
+    command.add_argument("dir", help="Directory to write the article text files into")
+    command.set_defaults(run=fetch)
     command = commands.add_parser("phases", help="Per-phase timing against llama-server; disturbs slot 0")
     command.add_argument("llama_url", help="llama-server base URL, for example http://127.0.0.1:8089")
     command.add_argument("slot_dir", help="That server's --slot-save-path")

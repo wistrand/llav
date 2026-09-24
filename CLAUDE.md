@@ -29,10 +29,12 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `src/llav/webui.html`      | Optional browser UI (`--web-ui`); self-contained, no external requests |
 | `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
 | `src/llav/native.py`       | `NativeReadout`: the optional helper's process and protocol            |
+| `src/llav/calibration.py`  | `Calibration`: optional per-type temperature file, model hash check    |
 | `native/llav-readout.cpp`  | That helper: batched readout against libllama; see native/README.md    |
 | `tests/test_llav.py`       | Unit tests with a fake llama-server; no model needed                   |
 | `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
-| `scripts/benchmark.py`     | `accuracy`, `timing`, `phases` against a running llav                  |
+| `scripts/benchmark.py`     | `accuracy`, `timing`, `articles`, `fetch`, `phases` against a llav     |
+| `scripts/evaluate.py`      | Labelled data: accuracy, Brier, ECE, coverage; option-order `shifts`   |
 | `scripts/fetch-model.sh`   | Downloads a pinned Q8_0 GGUF (Qwen3.5-4B default) and checks SHA-256   |
 | `scripts/remote-gpu.sh`    | Starts llav on a rented CUDA box over SSH; NATIVE=1, TS_AUTHKEY=...    |
 | `agent_docs/`              | Deep dives, linked below                                               |
@@ -45,7 +47,8 @@ PYTHONPATH=src python3 -m llav --gguf PATH.gguf          # serve (starts llama-s
 PYTHONPATH=src python3 -m llav --help                    # flags; the source of truth for options
 python3 -m unittest discover -s tests                    # unit tests
 scripts/fetch-model.sh DIR [MODEL]                       # get a pinned model (default qwen3.5-4b)
-scripts/benchmark.py timing http://127.0.0.1:8080        # also: accuracy, phases (see its --help)
+scripts/benchmark.py timing http://127.0.0.1:8080        # also accuracy, articles, phases
+scripts/evaluate.py score http://127.0.0.1:8080 DIR      # after `evaluate.py fetch DIR`; also shifts, fit
 ```
 
 Runtime requirement: `llama-server` from llama.cpp on `PATH`, or passed with `--llama-server`. The README's
@@ -85,6 +88,8 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - Always return a slot to `Engine.free` in a `finally`, or the server loses capacity permanently.
 - Never let a native-readout failure fail a request: `Engine` drops the helper and answers through
   llama-server instead. The HTTP path stays the reference implementation, and the tests cover it.
+- Never ship a calibration file. Temperatures fitted on one workload miscalibrate another (see
+  agent_docs/research.md); callers fit their own with `scripts/evaluate.py fit`.
 - Keep the response body to the public System One shape: `model`, `answers`, `usage` with only
   `input_tokens` and `output_tokens`. Put llav-specific data in `X-Llav-*` headers.
 - Never present llav as Jev or TypeSafe. Responses name llav's own model id, and the README keeps its
