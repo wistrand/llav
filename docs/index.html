@@ -36,6 +36,23 @@ nav .brand { font-weight: 700; color: var(--text); text-decoration: none; margin
 nav a { text-decoration: none; font-size: 0.93rem; }
 main { max-width: 60rem; margin: 0 auto; padding: 0 1rem 4rem; }
 header.hero { padding: 3rem 0 1rem; }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 2.2rem; align-items: center; }
+@media (max-width: 52rem) { .hero-grid { grid-template-columns: 1fr; gap: 1.2rem; } }
+.hero-art { width: 100%; height: auto; display: block; }
+.hero-art .card { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.hero-art .doc { fill: var(--panel); stroke: var(--axis); stroke-width: 1.5; }
+.hero-art .t { fill: var(--text); font: 15px var(--sans); }
+.hero-art .t.big { font-size: 21px; font-weight: 650; }
+.hero-art .t.val { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hero-art .m { fill: var(--ink3); font: 12.5px var(--sans); }
+.hero-art .kind { fill: var(--accent); font: 600 11.5px var(--mono); }
+.hero-art .wire { fill: none; stroke: var(--axis); stroke-width: 2; }
+.hero-art .track { fill: var(--grid); }
+.hero-art .hi { fill: var(--s1); }
+.hero-art .lo { fill: var(--deemph); }
+.hero-art .ghost { fill: var(--grid); }
+.hero-art .scale { stroke: var(--axis); stroke-width: 2; stroke-linecap: round; }
+.hero-art .dot { fill: var(--s1); stroke: var(--panel); stroke-width: 3; }
 header.hero h1 { font-size: 2.4rem; margin: 0 0 0.3rem; letter-spacing: -0.02em; }
 header.hero p.lead { font-size: 1.2rem; color: var(--muted); margin: 0 0 1.5rem; max-width: 42rem; }
 .example { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.2rem;
@@ -76,6 +93,93 @@ figure { margin: 1rem 0; }
 figure img { max-width: 100%; border: 1px solid var(--line); border-radius: 10px; }
 figcaption { font-size: 0.88rem; color: var(--muted); }
 .disclaimer { font-size: 0.9rem; color: var(--muted); border-left: 3px solid var(--line); padding-left: 0.8rem; }
+/* Illustrations. Chart colours are the dataviz reference palette, validated for this page's surfaces:
+   slots 1-4 pass the adjacent-pair checks in both modes, slots 1-3 all pairs (reliability dots). */
+:root {
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --deemph: #c3c2b7;
+  --grid: #e8e8e4; --axis: #c3c2b7; --ink2: #52514e; --ink3: #898781;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --deemph: #4a4b48;
+    --grid: #2a2e34; --axis: #3a3f46; --ink2: #c3c2b7; --ink3: #8f959d; }
+}
+.figure { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1.1rem 1.2rem;
+  margin: 1rem 0 1.2rem; }
+.figure h4 { margin: 0 0 0.2rem; font-size: 1rem; }
+.figure .sub { margin: 0 0 0.9rem; color: var(--muted); font-size: 0.9rem; }
+.figure details { margin-top: 0.6rem; font-size: 0.9rem; }
+.figure details summary { cursor: pointer; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem; font-size: 0.85rem; color: var(--ink2); margin: 0 0 0.6rem; }
+.legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.legend i.line { width: 16px; height: 2px; border-radius: 1px; }
+
+/* 1. mechanism */
+.mech { display: grid; grid-template-columns: 1fr auto 1fr auto 0.8fr; gap: 0.6rem; align-items: stretch; }
+.mech .pane { border: 1px solid var(--line); border-radius: 10px; padding: 0.8rem; background: var(--bg); min-width: 0; }
+.mech .pane .tag { font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink3);
+  margin-bottom: 0.5rem; }
+.mech .prompt { font-family: var(--mono); font-size: 0.78rem; line-height: 1.5; color: var(--ink2); }
+.mech .prompt b { color: var(--text); font-weight: 600; }
+.mech .prompt .opt { display: block; }
+.mech .prompt .letter { display: inline-block; min-width: 1.4em; text-align: center; border-radius: 4px;
+  background: var(--accent-soft); color: var(--text); font-weight: 700; margin-right: 0.3rem; }
+.mech .hop { align-self: center; text-align: center; color: var(--muted); font-size: 0.78rem; line-height: 1.3; }
+.mech .hop .arr { display: block; font-size: 1.4rem; line-height: 1; }
+.probs .row { display: grid; grid-template-columns: 1.6em 1fr 3.4em; align-items: center; gap: 0.4rem; margin: 0.35rem 0;
+  font-size: 0.85rem; }
+.probs .row .k { font-family: var(--mono); font-weight: 700; text-align: center; }
+.probs .row .track { height: 12px; }
+.probs .row .bar { height: 12px; border-radius: 0 4px 4px 0; background: var(--deemph); min-width: 2px; }
+.probs .row .bar.top { background: var(--s1); }
+.probs .row .v { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink2); font-size: 0.8rem; }
+.probs .row.other .k { font-family: var(--sans); font-weight: 400; font-size: 0.72rem; color: var(--ink3); text-align: left; }
+.probs .caption { font-size: 0.78rem; color: var(--ink3); margin-top: 0.5rem; }
+.mech .answer { font-family: var(--mono); font-size: 0.78rem; line-height: 1.55; color: var(--ink2); white-space: pre; overflow-x: auto; }
+.mech .answer b { color: var(--text); }
+@media (max-width: 46rem) {
+  .mech { grid-template-columns: 1fr; }
+  .mech .hop .arr { transform: rotate(90deg); display: inline-block; }
+}
+
+/* 2. timelines and 3. mass bars */
+.tl-row { display: grid; grid-template-columns: 10.5rem 1fr 3.4rem; gap: 0.6rem; align-items: center; margin: 0.55rem 0; }
+.tl-row .name { font-size: 0.85rem; color: var(--ink2); }
+.tl-row .total { font-size: 0.85rem; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.tl { display: flex; gap: 2px; height: 18px; }
+.tl i { display: block; height: 100%; border-radius: 3px; min-width: 3px; }
+.tl i.text { background: var(--s1); }
+.tl i.q { background: var(--s2); }
+.tl i.r { background: var(--s3); }
+.mass-row { margin: 0.8rem 0 1rem; }
+.mass-row .q { font-size: 0.9rem; margin-bottom: 0.35rem; }
+.mass-row .q b { font-variant-numeric: tabular-nums; }
+.mass { display: flex; gap: 2px; height: 26px; }
+.mass i { display: flex; align-items: center; justify-content: center; border-radius: 4px; font-style: normal;
+  font-size: 0.74rem; color: #fff; white-space: nowrap; min-width: 3px; }
+.mass i.opt { background: var(--s1); }
+.mass i.none { background: var(--s2); color: #16181b; }
+.mass i.rest { background: var(--deemph); color: var(--text); }
+.mass-key { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--ink3); margin-top: 0.25rem; }
+@media (max-width: 40rem) { .tl-row { grid-template-columns: 1fr 3rem; } .tl-row .name { grid-column: 1 / -1; } }
+
+/* 4-6. charts */
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { fill: var(--ink2); font: 12px var(--sans); }
+.chart .val { fill: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart .tick { fill: var(--ink3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .gridline { stroke: var(--grid); stroke-width: 1; }
+.chart .axisline { stroke: var(--axis); stroke-width: 1; }
+.chart .hit { fill: transparent; cursor: default; outline: none; }
+.chart .hit:focus-visible { stroke: var(--accent); stroke-width: 2; }
+.tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); border-radius: 6px;
+  padding: 0.35rem 0.55rem; font-size: 0.8rem; line-height: 1.35; white-space: nowrap; z-index: 5;
+  transform: translate(-50%, calc(-100% - 10px)); opacity: 0; transition: opacity 0.1s; }
+.tip.on { opacity: 1; }
+.tip b { font-variant-numeric: tabular-nums; }
+.tip .k { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 0.35rem; }
+
 footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 1px solid var(--line);
   color: var(--muted); font-size: 0.9rem; }
 </style>
@@ -98,18 +202,69 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
 <main id="top">
 
 <header class="hero">
-  <h1>llav</h1>
-  <p class="lead">Ask a local language model yes/no, multiple-choice and rating questions about a piece of text,
-    and get probabilities back instead of generated text.</p>
-  <div class="example" aria-label="Example">
-    <span class="k">text</span><span>"Help! My payouts have been failing for 3 days."</span>
-    <span class="k">question</span><span>Which team should handle this? billing / technical / sales</span>
-    <span class="k">answer</span><span>billing 0.85, technical 0.15, sales 0.00</span>
-  </div>
-  <div class="buttons">
-    <a class="button primary" href="#start">Get started</a>
-    <a class="button" href="https://github.com/wistrand/llav">Source on GitHub</a>
-    <a class="button" href="#results">See the results</a>
+  <div class="hero-grid">
+    <div>
+      <h1>llav</h1>
+      <p class="lead">Ask a local language model yes/no, multiple-choice and rating questions about a piece of
+        text, and get probabilities back instead of generated text.</p>
+      <div class="buttons">
+        <a class="button primary" href="#start">Get started</a>
+        <a class="button" href="https://github.com/wistrand/llav">Source on GitHub</a>
+      </div>
+    </div>
+    <svg class="hero-art" viewBox="0 0 560 390" role="img" aria-labelledby="hero-title hero-desc">
+      <title id="hero-title">One text, three typed questions, three answers with probabilities</title>
+      <desc id="hero-desc">The support ticket "Help! My payouts have been failing for 3 days." is asked three
+        questions. Does this convey urgency: yes, 0.997. Which team should handle this: billing 0.85, technical
+        0.15, sales 0.00. How frustrated is the customer: 0.94 on a scale from calm to very angry, nearly at
+        frustrated.</desc>
+      <!-- the text -->
+      <rect class="doc" x="8" y="112" width="196" height="150" rx="12"/>
+      <text class="kind" x="24" y="138">state</text>
+      <text class="t" x="24" y="166">Help! My payouts</text>
+      <text class="t" x="24" y="188">have been failing</text>
+      <text class="t" x="24" y="210">for 3 days.</text>
+      <rect class="ghost" x="24" y="226" width="142" height="7" rx="3.5"/>
+      <rect class="ghost" x="24" y="241" width="98" height="7" rx="3.5"/>
+      <text class="m" x="8" y="292">the text is read once,</text>
+      <text class="m" x="8" y="310">then one pass per question</text>
+      <!-- wires -->
+      <path class="wire" d="M204 170 C236 170 230 62 262 62"/>
+      <path class="wire" d="M204 187 C232 187 232 192 262 192"/>
+      <path class="wire" d="M204 204 C236 204 230 322 262 322"/>
+      <!-- noul -->
+      <rect class="card" x="262" y="12" width="290" height="100" rx="12"/>
+      <text class="kind" x="278" y="36">noul</text>
+      <text class="m" x="318" y="36">Does this convey urgency?</text>
+      <text class="t big" x="278" y="68">yes</text>
+      <text class="t val" x="536" y="66" text-anchor="end">0.997</text>
+      <rect class="track" x="278" y="82" width="258" height="12" rx="6"/>
+      <rect class="hi" x="278" y="82" width="257" height="12" rx="6"/>
+      <!-- choice -->
+      <rect class="card" x="262" y="142" width="290" height="100" rx="12"/>
+      <text class="kind" x="278" y="166">choice</text>
+      <text class="m" x="334" y="166">Which team should handle it?</text>
+      <text class="t" x="278" y="192" font-weight="600">billing</text>
+      <rect class="hi" x="360" y="182" width="136" height="12" rx="3"/>
+      <text class="t val" x="536" y="192" text-anchor="end">0.85</text>
+      <text class="t" x="278" y="212">technical</text>
+      <rect class="lo" x="360" y="202" width="24" height="12" rx="3"/>
+      <text class="t val" x="536" y="212" text-anchor="end">0.15</text>
+      <text class="t" x="278" y="232">sales</text>
+      <rect class="lo" x="360" y="222" width="2" height="12" rx="1"/>
+      <text class="t val" x="536" y="232" text-anchor="end">0.00</text>
+      <!-- score -->
+      <rect class="card" x="262" y="272" width="290" height="110" rx="12"/>
+      <text class="kind" x="278" y="296">score</text>
+      <text class="m" x="326" y="296">How frustrated is the customer?</text>
+      <line class="scale" x1="290" y1="336" x2="522" y2="336"/>
+      <circle class="lo" cx="290" cy="336" r="4"/><circle class="lo" cx="406" cy="336" r="4"/><circle class="lo" cx="522" cy="336" r="4"/>
+      <circle class="dot" cx="399" cy="336" r="8"/>
+      <text class="t val" x="399" y="322" text-anchor="middle">0.94</text>
+      <text class="m" x="290" y="362" text-anchor="middle">Calm</text>
+      <text class="m" x="406" y="362" text-anchor="middle">Frustrated</text>
+      <text class="m" x="522" y="362" text-anchor="end">Very angry</text>
+    </svg>
   </div>
 </header>
 
@@ -137,23 +292,87 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
 
 <section aria-labelledby="how">
   <h2 id="how">How it works</h2>
-  <div class="flow" role="list">
-    <div class="step" role="listitem"><b>Your text and question</b><span>billing / technical / sales</span></div>
-    <div class="arrow" aria-hidden="true">→</div>
-    <div class="step" role="listitem"><b>Prompt with lettered options</b><span>A billing · B technical · C sales</span></div>
-    <div class="arrow" aria-hidden="true">→</div>
-    <div class="step" role="listitem"><b>Local model</b><span>one forward pass, no text generated</span></div>
-    <div class="arrow" aria-hidden="true">→</div>
-    <div class="step" role="listitem"><b>How likely the next token is A, B or C</b><span>read from the model's probabilities</span></div>
-    <div class="arrow" aria-hidden="true">→</div>
-    <div class="step" role="listitem"><b>Typed answer</b><span>billing 0.85 · technical 0.15 · sales 0.00</span></div>
+  <div class="figure" role="figure" aria-label="How llav answers a question">
+    <h4>One question, one forward pass</h4>
+    <p class="sub">The support ticket from the top of the page, as Qwen3.5-4B sees it.</p>
+    <div class="mech">
+      <div class="pane"><div class="tag">1 · the prompt, simplified</div>
+        <div class="prompt"><b>evidence</b> Help! My payouts have been failing for 3 days.<br>
+          <b>criterion</b> Which team should handle this?<br>
+          <span class="opt"><span class="letter">A</span>billing: Payments, invoicing, refunds</span>
+          <span class="opt"><span class="letter">B</span>technical: Bugs, outages, integrations</span>
+          <span class="opt"><span class="letter">C</span>sales: Pricing, upgrades, new accounts</span>
+          <span style="color:var(--ink3)">Answer with one letter.</span></div></div>
+      <div class="hop"><span class="arr" aria-hidden="true">→</span>one forward<br>pass</div>
+      <div class="pane probs"><div class="tag">2 · next-token probabilities</div>
+        <div class="row"><span class="k">A</span><div class="track"><div class="bar top" style="width:84.9%"></div></div><span class="v">84.9%</span></div>
+        <div class="row"><span class="k">B</span><div class="track"><div class="bar" style="width:15%"></div></div><span class="v">15.0%</span></div>
+        <div class="row"><span class="k">C</span><div class="track"><div class="bar" style="width:0.2%"></div></div><span class="v">0.2%</span></div>
+        <div class="row other"><span class="k">rest</span><div class="track"><div class="bar" style="width:0.03%"></div></div><span class="v">&lt;0.1%</span></div>
+        <div class="caption">Read from the model's probabilities for its next token. Nothing is generated.</div></div>
+      <div class="hop"><span class="arr" aria-hidden="true">→</span>keep the<br>letters</div>
+      <div class="pane"><div class="tag">3 · the typed answer</div>
+<div class="answer">{
+  "type": "choice",
+  "choice": <b>"billing"</b>,
+  "probabilities": {
+    "billing":   0.849,
+    "technical": 0.150,
+    "sales":     0.002
+  }
+}</div></div>
+    </div>
   </div>
+
   <p>Each question is one forward pass. llav reads how likely the model is to answer with each option's letter and
     normalizes that over the options. Nothing is sampled, so there is no output to parse, no reasoning to wait for,
     and nothing to retry when a model answers in prose.</p>
   <p>When a request asks several questions about the same text, llav reads the text once and shares it between
     them, and keeps it for later requests. An optional native helper answers all of a request's questions in one
     batched pass on a GPU.</p>
+  <div class="figure" role="figure" aria-labelledby="tl-title">
+    <h4 id="tl-title">Reading the text once</h4>
+    <p class="sub">Three questions about an 1,800-token text, on a laptop's integrated GPU. Bar length is time.</p>
+    <div class="legend"><span><i style="background:var(--s1)"></i>reading the text</span>
+      <span><i style="background:var(--s2)"></i>answering a question</span>
+      <span><i style="background:var(--s3)"></i>restoring the saved text</span></div>
+    <div class="tl-row"><span class="name">Without sharing</span>
+      <div class="tl" aria-label="8.9 seconds: the text is read three times">
+        <i class="text" style="flex:2.80"></i><i class="q" style="flex:0.157"></i>
+        <i class="text" style="flex:2.80"></i><i class="q" style="flex:0.157"></i>
+        <i class="text" style="flex:2.80"></i><i class="q" style="flex:0.157"></i></div><span class="total">8.9 s</span></div>
+    <div class="tl-row"><span class="name">llav, first request</span>
+      <div class="tl" aria-label="3.3 seconds: the text is read once"><i class="text" style="flex:2.80"></i><i class="q" style="flex:0.157"></i>
+        <i class="r" style="flex:0.02"></i><i class="q" style="flex:0.157"></i><i class="r" style="flex:0.02"></i><i class="q" style="flex:0.157"></i>
+        <i style="flex:5.54;background:none"></i></div><span class="total">3.3 s</span></div>
+    <div class="tl-row"><span class="name">llav, same text again</span>
+      <div class="tl" aria-label="0.5 seconds: the saved text is restored"><i class="r" style="flex:0.02"></i><i class="q" style="flex:0.157"></i>
+        <i class="r" style="flex:0.02"></i><i class="q" style="flex:0.157"></i><i class="r" style="flex:0.02"></i><i class="q" style="flex:0.157"></i>
+        <i style="flex:8.34;background:none"></i></div><span class="total">0.5 s</span></div>
+    <details><summary>Where the numbers come from</summary>
+      <p>Measured phase costs on an Intel Arc B390 laptop with Qwen3.5-4B: reading an 1,800-token text 2.80 s,
+        answering one question 157 ms, restoring the saved text 20 ms. The rows add those up for three questions;
+        see performance.md for the full breakdown.</p></details>
+  </div>
+
+  <h3>When no option fits</h3>
+  <p>Because llav reads probabilities instead of text, it can also see how much of the model's probability went
+    to the option letters at all. That share, the candidate mass, is returned in <code>X-Llav-Candidate-Mass</code>.
+    When it is low, the model wanted to answer something else.</p>
+  <div class="figure" role="figure" aria-labelledby="mass-title">
+    <h4 id="mass-title">Where the model's probability went</h4>
+    <p class="sub">Two questions about the same ticket. The second has no right option.</p>
+    <div class="legend"><span><i style="background:var(--s1)"></i>the option letters</span>
+      <span><i style="background:var(--s2)"></i>"NA", "None", "Neither"</span>
+      <span><i style="background:var(--deemph)"></i>other tokens</span></div>
+    <div class="mass-row"><div class="q">Which team should handle this? <span class="muted">·</span> letters got <b>99.97%</b></div>
+      <div class="mass" aria-label="the option letters got 99.97 percent"><i class="opt" style="flex:99.97">A, B, C</i></div></div>
+    <div class="mass-row"><div class="q">What colour is the customer's car? red / blue <span class="muted">·</span> letters got <b>57%</b></div>
+      <div class="mass" aria-label="the letters got 57 percent, none-of-them tokens 30 percent, other tokens 13 percent">
+        <i class="opt" style="flex:44.9">A red 45%</i><i class="opt" style="flex:11.9">B 12%</i>
+        <i class="none" style="flex:30.5">none of them 30%</i><i class="rest" style="flex:12.7">13%</i></div>
+      <div class="mass-key"><span>The answer still says red at 79%: the softmax over A and B hides the refusal.</span></div></div>
+  </div>
 </section>
 
 <section aria-labelledby="start">
@@ -243,6 +462,11 @@ scripts/fetch-model.sh ~/models</code></pre>
   <p>Accuracy on 1,176 labelled questions: samples of public datasets (DBpedia, BoolQ, AG News, Banking77 card
     intents, Yelp stars) plus SemIf's 144 authored decisions on evidence, rules and candidates. Every system got the
     same questions. ECE is the calibration error of the top answer's probability; lower is better.</p>
+  <div class="figure" role="figure" aria-labelledby="acc-title">
+    <h4 id="acc-title">Accuracy on the same 1,176 questions</h4>
+    <p class="sub">llav highlighted. The table below has every number.</p>
+    <div class="chart" id="chart-accuracy"></div>
+  </div>
   <div class="table-wrap"><table>
     <thead><tr><th>System</th><th>Accuracy</th><th>ECE</th><th>Right when above 0.9</th><th>Changes with option order</th></tr></thead>
     <tbody>
@@ -263,6 +487,18 @@ scripts/fetch-model.sh ~/models</code></pre>
     <li>The small trained encoders are about three times faster but cannot read a claim against evidence: they
       fall 21 to 65 points behind on SemIf's evidence, rule and candidate questions.</li>
   </ul>
+  <div class="figure" role="figure" aria-labelledby="cal-title">
+    <h4 id="cal-title">Is 90% sure right 90% of the time?</h4>
+    <p class="sub">Answers grouped by how sure the system was, against how often they were right. On the diagonal is
+      perfectly calibrated; below it is overconfident.</p>
+    <div class="legend"><span><i class="line" style="background:var(--s1)"></i>llav, Qwen3.5-4B</span>
+      <span><i class="line" style="background:var(--s2)"></i>llav with a fitted temperature</span>
+      <span><i class="line" style="background:var(--s3)"></i>Jev</span></div>
+    <div class="chart" id="chart-calibration"></div>
+    <details><summary>Table view</summary><div class="table-wrap"><table id="table-calibration"></table></div>
+      <p class="note">Bins with fewer than 30 answers are left out. The fitted temperature was scored on the same
+        questions it was fitted on here; held out, ECE fell from 0.069 to 0.023.</p></details>
+  </div>
   <h3>On Jevals' published tasks</h3>
   <p><a href="https://jevals.com/">Jevals</a> scores Jev and six LLMs on fixed items against human labels.
     llav rebuilds two of its tasks item for item and computes the same Decision Score: 0 is guessing by the label
@@ -294,9 +530,19 @@ scripts/fetch-model.sh ~/models</code></pre>
       <tr><td>RTX 3090, CUDA</td><td>1.16 s</td><td>0.65 s</td><td>0.75 s / 0.21 s</td></tr>
     </tbody>
   </table></div>
-  <p>For comparison, Jev through OpenRouter answered one to ten questions in 0.3 to 0.4 s per request from a
-    laptop, about 140 ms of it network. A local llav on a GPU was faster; on a laptop's integrated GPU it was
-    slower.</p>
+  <div class="figure" role="figure" aria-labelledby="speed-title">
+    <h4 id="speed-title">Time per request, by number of questions</h4>
+    <p class="sub">A 300-token support ticket. llav and Laya on an RTX PRO 4000 next to the client; Jev through
+      OpenRouter from a laptop, about 140 ms of it network.</p>
+    <div class="legend"><span><i class="line" style="background:var(--s1)"></i>llav, new text</span>
+      <span><i class="line" style="background:var(--s2)"></i>llav, same text again</span>
+      <span><i class="line" style="background:var(--s3)"></i>Jev over the network</span>
+      <span><i class="line" style="background:var(--s4)"></i>Laya (trained encoder)</span></div>
+    <div class="chart" id="chart-speed"></div>
+    <details><summary>Table view</summary><div class="table-wrap"><table id="table-speed"></table></div></details>
+  </div>
+  <p>A local llav on a GPU answers faster than Jev over the network; on a laptop's integrated GPU it is slower.
+    Laya, a 400M-parameter encoder, is fastest of all but much less accurate on questions that need reading.</p>
 </section>
 
 <section aria-labelledby="options">
@@ -330,5 +576,158 @@ llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own lla
   <code>direct-options-v1</code>.
 </footer>
 
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const tip = document.getElementById("tip");
+  const el = (tag, attrs = {}, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  // Tooltips enhance, never gate: every value is also in a label or a table view.
+  function hover(target, host, lines) {
+    const show = (x, y) => {
+      tip.replaceChildren();
+      lines.forEach((line, i) => {
+        const row = document.createElement("div");
+        if (line.color) { const k = document.createElement("span"); k.className = "k"; k.style.background = line.color; row.append(k); }
+        const b = document.createElement("b"); b.textContent = line.value; row.append(b);
+        if (line.label) row.append(document.createTextNode(" " + line.label));
+        tip.append(row);
+      });
+      const box = host.getBoundingClientRect();
+      tip.style.left = (window.scrollX + box.left + x) + "px";
+      tip.style.top = (window.scrollY + box.top + y) + "px";
+      tip.classList.add("on");
+    };
+    target.setAttribute("tabindex", "0");
+    target.addEventListener("pointerenter", () => { const b = target.getBBox(); show(b.x + b.width / 2, b.y); });
+    target.addEventListener("focus", () => { const b = target.getBBox(); show(b.x + b.width / 2, b.y); });
+    for (const ev of ["pointerleave", "blur"]) target.addEventListener(ev, () => tip.classList.remove("on"));
+  }
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // 4. accuracy: one series, llav emphasized, the rest de-emphasized.
+  const accuracy = [
+    ["Jev (hosted)", 89.0, false], ["llav, Qwen3.5-4B", 82.9, true], ["llav, Muse Glimmer 30B", 82.9, true],
+    ["von 1.2", 76.4, false], ["Laya typed-decisions", 74.8, false], ["CLM", 39.7, false]];
+  function drawAccuracy(host) {
+    const w = host.clientWidth, labelW = Math.min(170, w * 0.38), right = 44, row = 30, top = 4;
+    const h = top + accuracy.length * row + 22, plotW = w - labelW - right;
+    const svg = el("svg", { width: w, height: h, role: "img", "aria-label": "Accuracy per system, bar chart" });
+    const x = (v) => labelW + (v / 100) * plotW;
+    for (const t of [0, 25, 50, 75, 100]) {
+      svg.append(el("line", { x1: x(t), x2: x(t), y1: top, y2: h - 20, class: "gridline" }));
+      svg.append(el("text", { x: x(t), y: h - 6, "text-anchor": "middle", class: "tick" }, t + "%"));
+    }
+    accuracy.forEach(([name, v, emph], i) => {
+      const y = top + i * row + 7, bh = 16;
+      svg.append(el("text", { x: labelW - 10, y: y + 12, "text-anchor": "end" }, name));
+      const len = x(v) - labelW;
+      svg.append(el("path", { d: `M${labelW},${y} h${len - 4} a4,4 0 0 1 4,4 v${bh - 8} a4,4 0 0 1 -4,4 h${-(len - 4)} z`,
+        fill: emph ? css("--s1") : css("--deemph") }));
+      svg.append(el("text", { x: x(v) + 6, y: y + 12, class: "val" }, v.toFixed(1) + "%"));
+      const hit = el("rect", { x: labelW, y: y - 6, width: plotW, height: row - 2, class: "hit" });
+      svg.append(hit);
+      hover(hit, host, [{ value: v.toFixed(1) + "%", label: name + " right" }]);
+    });
+    host.replaceChildren(svg);
+  }
+
+  // 5. calibration: reliability diagram; bins with fewer than 30 answers left out.
+  const calibration = [
+    { name: "llav, Qwen3.5-4B", color: "--s1", pts: [[0.360, 0.353, 34], [0.456, 0.432, 37], [0.549, 0.614, 57], [0.655, 0.528, 53], [0.755, 0.490, 49], [0.856, 0.756, 90], [0.986, 0.932, 847]] },
+    { name: "llav, fitted temperature", color: "--s2", pts: [[0.350, 0.531, 49], [0.448, 0.444, 63], [0.551, 0.538, 78], [0.646, 0.682, 88], [0.749, 0.763, 97], [0.857, 0.902, 123], [0.966, 0.975, 636]] },
+    { name: "Jev", color: "--s3", pts: [[0.544, 0.600, 50], [0.649, 0.565, 62], [0.746, 0.623, 77], [0.845, 0.757, 74], [0.988, 0.963, 910]] }];
+  function drawCalibration(host) {
+    const w = host.clientWidth, h = Math.min(360, Math.max(260, w * 0.55)), l = 46, r = 12, t = 8, b = 34;
+    const x = (v) => l + ((v - 0.3) / 0.7) * (w - l - r), y = (v) => t + (1 - (v - 0.3) / 0.7) * (h - t - b);
+    const svg = el("svg", { width: w, height: h, role: "img", "aria-label": "Calibration: confidence against accuracy" });
+    for (const v of [0.3, 0.5, 0.7, 0.9]) {
+      svg.append(el("line", { x1: l, x2: w - r, y1: y(v), y2: y(v), class: "gridline" }));
+      svg.append(el("text", { x: l - 8, y: y(v) + 4, "text-anchor": "end", class: "tick" }, Math.round(v * 100) + "%"));
+      svg.append(el("text", { x: x(v), y: h - 16, "text-anchor": "middle", class: "tick" }, Math.round(v * 100) + "%"));
+    }
+    svg.append(el("text", { x: (l + w - r) / 2, y: h - 1, "text-anchor": "middle", class: "tick" }, "how sure (mean probability of the answer)"));
+    svg.append(el("text", { x: 12, y: t + 4, class: "tick", transform: `rotate(-90 12 ${t + 4})`, "text-anchor": "end" }, "how often right"));
+    svg.append(el("line", { x1: x(0.3), y1: y(0.3), x2: x(1), y2: y(1), class: "axisline" }));
+    svg.append(el("text", { x: x(0.99), y: y(1) - 6, "text-anchor": "end", class: "tick" }, "perfect"));
+    for (const s of calibration) {
+      const color = css(s.color);
+      svg.append(el("polyline", { points: s.pts.map(([c, a]) => `${x(c)},${y(a)}`).join(" "), fill: "none", stroke: color,
+        "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      for (const [c, a, n] of s.pts) {
+        svg.append(el("circle", { cx: x(c), cy: y(a), r: 4.5, fill: color, stroke: css("--panel"), "stroke-width": 2 }));
+        const hit = el("circle", { cx: x(c), cy: y(a), r: 12, class: "hit" });
+        svg.append(hit);
+        hover(hit, host, [{ color, value: Math.round(a * 100) + "% right", label: `when ${Math.round(c * 100)}% sure · ${s.name} · ${n} answers` }]);
+      }
+    }
+    host.replaceChildren(svg);
+  }
+  const calTable = document.getElementById("table-calibration");
+  calTable.innerHTML = "<thead><tr><th>Series</th><th>Mean probability</th><th>Right</th><th>Answers</th></tr></thead>";
+  const calBody = document.createElement("tbody");
+  for (const s of calibration) for (const [c, a, n] of s.pts) {
+    const tr = document.createElement("tr");
+    for (const v of [s.name, Math.round(c * 100) + "%", Math.round(a * 100) + "%", n]) { const td = document.createElement("td"); td.textContent = v; tr.append(td); }
+    calBody.append(tr);
+  }
+  calTable.append(calBody);
+
+  // 6. speed: four series, direct labels at the line ends plus a legend.
+  const qs = [1, 5, 10];
+  const speed = [
+    { name: "Jev over the network", color: "--s3", v: [316, 327, 416] },
+    { name: "llav, new text", color: "--s1", v: [88, 147, 231] },
+    { name: "llav, same text again", color: "--s2", v: [29, 88, 171] },
+    { name: "Laya", color: "--s4", v: [26, 34, 59] }];
+  function drawSpeed(host) {
+    const w = host.clientWidth, h = 280, l = 52, r = w > 520 ? 210 : 60, t = 10, b = 34;
+    const x = (q) => l + ((q - 1) / 9) * (w - l - r), y = (v) => t + (1 - v / 450) * (h - t - b);
+    const svg = el("svg", { width: w, height: h, role: "img", "aria-label": "Milliseconds per request by number of questions" });
+    for (const v of [0, 100, 200, 300, 400]) {
+      svg.append(el("line", { x1: l, x2: w - r + 8, y1: y(v), y2: y(v), class: v ? "gridline" : "axisline" }));
+      svg.append(el("text", { x: l - 8, y: y(v) + 4, "text-anchor": "end", class: "tick" }, v + " ms"));
+    }
+    for (const q of qs) svg.append(el("text", { x: x(q), y: h - 14, "text-anchor": "middle", class: "tick" }, q + (q === 1 ? " question" : " questions")));
+    for (const s of speed) {
+      const color = css(s.color);
+      svg.append(el("polyline", { points: s.v.map((v, i) => `${x(qs[i])},${y(v)}`).join(" "), fill: "none", stroke: color,
+        "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      s.v.forEach((v, i) => svg.append(el("circle", { cx: x(qs[i]), cy: y(v), r: 4, fill: color, stroke: css("--panel"), "stroke-width": 2 })));
+      const end = s.v[s.v.length - 1];
+      svg.append(el("text", { x: x(10) + 10, y: y(end) + 4, class: "val" }, end + " ms"));
+      if (w > 520) svg.append(el("text", { x: x(10) + 58, y: y(end) + 4 }, s.name.replace(" over the network", "")));
+    }
+    qs.forEach((q, i) => {
+      const hit = el("rect", { x: x(q) - 30, y: t, width: 60, height: h - t - b, class: "hit" });
+      svg.append(hit);
+      hover(hit, host, speed.map((s) => ({ color: css(s.color), value: s.v[i] + " ms", label: s.name })).concat([{ value: q + (q === 1 ? " question" : " questions") }]));
+    });
+    host.replaceChildren(svg);
+  }
+  const spTable = document.getElementById("table-speed");
+  spTable.innerHTML = "<thead><tr><th>System</th><th>1 question</th><th>5 questions</th><th>10 questions</th></tr></thead>";
+  const spBody = document.createElement("tbody");
+  for (const s of speed) {
+    const tr = document.createElement("tr");
+    for (const v of [s.name, ...s.v.map((v) => v + " ms")]) { const td = document.createElement("td"); td.textContent = v; tr.append(td); }
+    spBody.append(tr);
+  }
+  spTable.append(spBody);
+
+  const charts = [["chart-accuracy", drawAccuracy], ["chart-calibration", drawCalibration], ["chart-speed", drawSpeed]];
+  const draw = () => charts.forEach(([id, fn]) => { const host = document.getElementById(id); if (host) fn(host); });
+  draw();
+  let lastWidth = 0;  // redraw on width changes only; the charts set their own height
+  new ResizeObserver(() => { const wNow = document.querySelector("main").clientWidth;
+    if (wNow !== lastWidth) { lastWidth = wNow; draw(); } }).observe(document.querySelector("main"));
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+})();
+</script>
 </body>
 </html>
