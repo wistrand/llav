@@ -7,7 +7,7 @@ llama-server whenever it is absent or fails.
 
 Worth it on a fast GPU, where the per-question fixed costs dominate. A repeat request of 10 questions went
 from 1.73 s to 1.22 s on an Arc iGPU laptop and from 0.65 s to 0.21 s on an RTX 3090. See
-[../agent_docs/research.md](../agent_docs/research.md) for the full numbers.
+[../agent_docs/performance.md](../agent_docs/performance.md) for the full numbers.
 
 ## Build
 
@@ -48,10 +48,10 @@ one pass (default 16); a request with more goes to llama-server. `GET /v1/models
 - The helper also returns each question's log-sum-exp over the vocabulary, for `X-Llav-Candidate-Mass`.
   The pass is split across the helper's `--threads`, 4 since llav does not pass the flag. Computed serially
   it cost 19 ms per question on the RTX PRO 4000 box, more than the batched decode (see
-  [agent_docs/research.md](../agent_docs/research.md)).
+  [agent_docs/performance.md](../agent_docs/performance.md)).
 - The helper does not keep a full sliding-window cache, unlike llama-server with `--swa-full`. It never rolls
   back, only extends a resident prefix forward, which needs just the last window. On Gemma 3 1B a full cache
-  cost 2.6 GB more for identical answers (see [agent_docs/research.md](../agent_docs/research.md)).
+  cost 2.6 GB more for identical answers (see [agent_docs/comparisons.md](../agent_docs/comparisons.md)).
 - The helper keeps only the most recent state resident, so `X-Llav-State-Cache` reports a hit when a request
   repeats the state its predecessor used. llav's slot-file cache serves the llama-server path.
 - Requests are serialized through the one helper process. With `--slots` above 1, llama-server can answer
@@ -60,6 +60,12 @@ one pass (default 16); a request with more goes to llama-server. `GET /v1/models
   differences are 1.3e-5 for an attention model and 0.002 for Qwen3.5, against 0.02 between machines.
   Within one batch on CUDA, identical prompts in different sequences differed by up to 0.09 (median 0) on
   Qwen3.5; no answer changed.
+- The helper answers on a private copy of its original stdout and points stdout at stderr at startup, so
+  anything llama.cpp, ggml or a GPU driver prints cannot corrupt an answer. When llav still gets an answer
+  it cannot read, the error quotes the helper's last stderr lines.
+- When llav drops the helper after a failure, it stops the process so its copy of the model leaves GPU
+  memory, and `GET /v1/models` reports the fallback (`backend.prefix_reuse`) and the cause
+  (`backend.native_error`).
 - The helper exits when llav closes its input, so it cannot outlive the server that started it.
 - Rebuild the helper when llama.cpp is upgraded. It uses the C API, so a mismatch is a compile error rather
   than silent corruption.

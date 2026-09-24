@@ -8,7 +8,7 @@
 #   granite-4.2-3b      IBM Granite 4.2 3B, Apache 2.0
 #   smollm3-3b          Hugging Face SmolLM3-3B, Apache 2.0
 #   muse-glimmer-30b    Meta Muse Glimmer 30B, Apache 2.0, Q4_K_M 16.8 GB; needs a GPU with about 18 GB free
-# Only the default is validated; agent_docs/research.md has the screening results for the others.
+# Only the default is validated; agent_docs/comparisons.md has the screening results for the others.
 set -euo pipefail
 
 dir="${1:-.}"

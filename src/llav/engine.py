@@ -145,6 +145,14 @@ class Engine:
         self.trims = self._probe_trim()
         self._probe_labels()
         self.native = native  # opt-in fast path; a failure here falls back to llama-server for good
+        self.native_error: str | None = None
+
+    def backend_status(self) -> dict:
+        """What `/v1/models` reports about state reuse now, not at startup: the helper can be dropped later."""
+        status = {"prefix_reuse": "native" if self.native else ("trim" if self.trims else "slot-file")}
+        if self.native_error:
+            status["native_error"] = self.native_error
+        return status
 
     def _probe_trim(self) -> bool:
         """Can the backend roll its cache back to a shared prefix, or must a slot file restore it?
@@ -358,6 +366,8 @@ class Engine:
             logits, normalizers, evaluated = native.evaluate(prefix, [ids[len(prefix):] for ids in encoded])
         except NativeError as error:
             self.native = None  # one broken helper must not break every later request
+            self.native_error = str(error)
+            native.kill()  # a helper that answered wrongly may still be running, holding a copy of the model
             print(f"llav: native readout disabled: {error}", file=sys.stderr)
             return None
         results = [softmax(values[:count]) for values, count in zip(logits, counts)]

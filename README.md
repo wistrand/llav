@@ -20,11 +20,23 @@ question:  Which team should handle this? billing / technical / sales
 answer:    billing 0.85, technical 0.15, sales 0.00
 ```
 
-llav runs a small open model ([Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) through
-[llama.cpp](https://github.com/ggml-org/llama.cpp)) on your own machine. Each question is one forward pass:
-llav reads how likely the model is to answer with each option's letter. Nothing is generated, so there is
-no output to parse and no reasoning to wait for. It suits programs that need a quick judgement about text,
-such as routing support tickets or deciding whether an agent's next step needs a human.
+llav runs an open model through [llama.cpp](https://github.com/ggml-org/llama.cpp) on your own machine.
+The default is [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B), but it is not the only choice: any GGUF
+chat model can be tried, llav checks at startup that it answers with option letters, and five alternatives
+are pinned for download, from Qwen3.5-2B to Meta's Muse Glimmer 30B (see [Quick start](#quick-start)).
+
+Each question is one forward pass: llav reads how likely the model is to answer with each option's letter.
+Nothing is generated, so there is no output to parse and no reasoning to wait for. It suits programs that
+need a quick judgement about text, such as routing support tickets or deciding whether an agent's next step
+needs a human.
+
+```mermaid
+flowchart LR
+    Q["Your text and question<br/>billing / technical / sales"] --> P["Prompt with lettered options<br/>A billing<br/>B technical<br/>C sales"]
+    P --> M["Local model<br/>one forward pass,<br/>no text generated"]
+    M --> R["How likely the next token<br/>is A, B or C"]
+    R --> ANS["Typed answer<br/>billing 0.85<br/>technical 0.15<br/>sales 0.00"]
+```
 
 The HTTP API has the same shape as TypeSafe's System One API (`POST /v1/systemone`), so code written for its
 Jev model can call llav instead. The question types keep TypeSafe's names: `noul` (yes/no), `choice` (pick
@@ -69,7 +81,7 @@ their respective owners. llav reproduces the public request/response shape, not 
    `granite-4.0-h-tiny` (7.4 GB), `granite-4.2-3b` (3.9 GB), `smollm3-3b` (3.3 GB) and `muse-glimmer-30b`
    (16.8 GB, as accurate as the default on the labelled set and better calibrated, but needs about 18 GB of
    GPU memory). Pass one as a second argument. Only the default is validated;
-   [agent_docs/research.md](agent_docs/research.md) compares them and lists the models that failed.
+   [agent_docs/comparisons.md](agent_docs/comparisons.md) compares them and lists the models that failed.
 
 3. Serve from the checkout. Nothing needs installing:
 
@@ -189,8 +201,10 @@ than a list of model names; `GET /v1/models` reports the choice as `backend.pref
 [native helper](native/README.md) answers every question of a request in one batched pass instead of one
 llama-server pass each, which cuts a repeat request of 10 questions from 0.65 s to 0.21 s on an RTX 3090.
 
-[agent_docs/architecture.md](agent_docs/architecture.md) has the request flow and the slot handling, and
-[agent_docs/research.md](agent_docs/research.md) the measurements behind all of it.
+[agent_docs/architecture.md](agent_docs/architecture.md) has the request flow and the slot handling. The
+measurements behind it are in [agent_docs/research.md](agent_docs/research.md) (accuracy, calibration),
+[agent_docs/performance.md](agent_docs/performance.md) (timings) and
+[agent_docs/comparisons.md](agent_docs/comparisons.md) (other models and systems).
 
 ## Accuracy
 
@@ -214,8 +228,12 @@ measured with `scripts/evaluate.py`. ECE is the expected calibration error of th
   clear ones (DBpedia).
 - The pinned `muse-glimmer-30b` scored the same 82.9% overall with better calibration (ECE 0.037 against
   0.069), using about three times the GPU memory (16 GB against 5 GB).
-- The per-source numbers, the order analysis, calibration and comparisons with Muse Glimmer 30B and with
-  CLM, a trained System One model, are in [agent_docs/research.md](agent_docs/research.md).
+- Trained open System One models scored lower on the same questions: Laya 73.0 to 74.8% (its
+  `typed-decisions` checkpoint is better calibrated, ECE 0.042), von 76.4%, CLM 39.7%. The encoders are
+  about three times faster and win on news-topic classification.
+- The per-source numbers, the order analysis, calibration and the comparisons with Muse Glimmer 30B, Laya,
+  von and CLM are in [agent_docs/research.md](agent_docs/research.md) and
+  [agent_docs/comparisons.md](agent_docs/comparisons.md).
 
 ## Performance
 
@@ -230,7 +248,7 @@ request; the last column is the same two numbers with the native helper.
 `scripts/benchmark.py` reproduces these. The helper column predates candidate mass, whose vocabulary pass
 added about 2 ms to such a request on an RTX PRO 4000. Per-phase costs, the other pinned models, an Apple M3 run,
 estimates for other hardware and what a text-generating baseline would cost are in
-[agent_docs/research.md](agent_docs/research.md).
+[agent_docs/performance.md](agent_docs/performance.md).
 
 ## Differences from Jev
 

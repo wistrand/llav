@@ -13,7 +13,7 @@ changes its answer, whether the model reads a decision rule written into `criter
 question sets also report the lowest and median candidate mass. `accuracy` and `timing` talk to llav. `phases` talks to llama-server directly, so it needs that server's
 URL and its --slot-save-path; it disturbs slot 0, so do not point it at a server that is serving.
 
-The numbers in agent_docs/research.md come from these three commands. Question sets are small on purpose:
+The numbers in agent_docs/performance.md and agent_docs/comparisons.md come from these commands. Question sets are small on purpose:
 they separate a broken model from a working one and show where a model is confidently wrong. They are not
 an accuracy benchmark.
 """

@@ -76,7 +76,7 @@ class NativeReadout:
         except (OSError, ValueError) as error:
             raise NativeError(f"the helper closed its output: {error}") from error
         if not data or len(data) != count:
-            raise NativeError("the helper stopped answering: " + " | ".join(self._errors[-3:]))
+            raise NativeError("the helper stopped answering: " + self._recent())
         return data
 
     def evaluate(self, prefix: list[int], suffixes: list[list[int]]) -> tuple[list[list[float]], list[float], int]:
@@ -94,15 +94,28 @@ class NativeReadout:
             except (OSError, ValueError) as error:  # ValueError: the pipe was already closed
                 raise NativeError(f"the helper closed its input: {error}") from error
             if self._read(4) != b"LLVA":
-                raise NativeError("the helper sent a malformed response")
+                raise NativeError("the helper sent a malformed response: " + self._recent())
             status, evaluated = struct.unpack("<2i", self._read(8))
             if status != 0:
-                raise NativeError(f"the helper returned status {status}: " + " | ".join(self._errors[-3:]))
+                raise NativeError(f"the helper returned status {status}: " + self._recent())
             width = len(self.labels) + 1
             raw = self._read(4 * width * len(suffixes))
         values = struct.unpack(f"<{width * len(suffixes)}f", raw)
         rows = [values[index * width:(index + 1) * width] for index in range(len(suffixes))]
         return [list(row[:-1]) for row in rows], [row[-1] for row in rows], evaluated
+
+    def _recent(self) -> str:
+        """The helper's last messages. A failing helper is often exiting; give its stderr a moment to arrive."""
+        try:
+            self.process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+        return " | ".join(self._errors[-3:]) or "no message on stderr"
+
+    def kill(self) -> None:
+        """Stop a helper llav no longer trusts, without waiting; `close` reaps it at shutdown."""
+        if self.process.poll() is None:
+            self.process.kill()
 
     def close(self) -> None:
         if self.process.poll() is None:

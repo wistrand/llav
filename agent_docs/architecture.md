@@ -69,7 +69,8 @@ llama-server's HTTP API, and shapes answers. Global rules are in
 6. `_evaluate_on` scores each question and returns probabilities, `usage` and metadata. With the native
    helper and a shared prefix, `_evaluate_native` sends every question in one batch and gets raw label
    logits plus each question's log-sum-exp over the vocabulary; on any `NativeError` the engine drops the
-   helper and continues through llama-server. Candidate mass is the declared labels' share of the vocabulary:
+   helper, stops its process and continues through llama-server; `Engine.backend_status` then reports the
+   fallback and its cause to `/v1/models`. Candidate mass is the declared labels' share of the vocabulary:
    the sum of their vocabulary-normalized `n_probs` on the llama-server path, `exp(logit - normalizer)` on the
    helper path.
 7. With `--calibration`, each question's probabilities are divided by its type's temperature in log space

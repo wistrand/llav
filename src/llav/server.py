@@ -117,7 +117,7 @@ class Handler(BaseHTTPRequestHandler):
             if self._authorized():
                 self._send(200, {"object": "list", "data": [{
                     "id": self.app.model_id, "object": "model", "aliases": self.app.aliases,
-                    "owned_by": "local", "backend": self.app.backend,
+                    "owned_by": "local", "backend": {**self.app.backend, **self.app.engine.backend_status()},
                 }]})
         else:
             self._send(404, {"detail": "Not found"})

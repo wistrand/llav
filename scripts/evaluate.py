@@ -40,7 +40,7 @@ Fit on the workload the thresholds will run on: calibration measured here differ
 
 Sources are samples of public datasets, taken evenly across each split so class-sorted splits are covered.
 They are downloaded for local evaluation only; their licences differ and none are redistributed here.
-Results go in agent_docs/research.md.
+Results go in agent_docs/research.md (llav) and agent_docs/comparisons.md (other models and systems).
 """
 
 from __future__ import annotations

@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> None:
         aliases = ["llav-latest"] + ([] if args.no_jev_alias else ["jev-latest"])
         health = (lambda: process.alive()) if process else (lambda: True)
         backend = {"runtime": "llama.cpp", "model_file": source.name, "slots": slots, "slot_ctx": slot_ctx,
-                   "prefix_reuse": "native" if engine.native else ("trim" if engine.trims else "slot-file"),
+                   **engine.backend_status(),
                    "calibration": calibration.id if calibration else None,
                    "template_profile": engine.profile.name, "assistant_prefix": engine.assistant_prefix,
                    "low_candidate_mass": engine.profile.low_mass}

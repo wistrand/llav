@@ -27,6 +27,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -44,14 +45,17 @@ bool read_tokens(std::vector<llama_token> & out, int32_t count) {
     return read_exact(out.data(), sizeof(llama_token) * static_cast<size_t>(count));
 }
 
+// Answers go to a private copy of the original stdout (see main), never to stdout itself.
+FILE * answers = nullptr;
+
 void write_response(int32_t status, int32_t evaluated, const std::vector<float> & values) {
-    fwrite("LLVA", 1, 4, stdout);
-    fwrite(&status, sizeof(status), 1, stdout);
-    fwrite(&evaluated, sizeof(evaluated), 1, stdout);
+    fwrite("LLVA", 1, 4, answers);
+    fwrite(&status, sizeof(status), 1, answers);
+    fwrite(&evaluated, sizeof(evaluated), 1, answers);
     if (!values.empty()) {
-        fwrite(values.data(), sizeof(float), values.size(), stdout);
+        fwrite(values.data(), sizeof(float), values.size(), answers);
     }
-    fflush(stdout);
+    fflush(answers);
 }
 
 // exp(x) for x <= 0, within 5e-6 relative error: 2^t split into an integer power, set in the exponent bits,
@@ -170,6 +174,14 @@ int main(int argc, char ** argv) {
         return 2;
     }
 
+    // Anything llama.cpp, ggml or a GPU driver prints to stdout would land in the middle of a binary answer
+    // and desynchronize llav. Keep the real stdout for answers only and point stdout at stderr.
+    const int answer_fd = dup(STDOUT_FILENO);
+    if (answer_fd < 0 || dup2(STDERR_FILENO, STDOUT_FILENO) < 0 || (answers = fdopen(answer_fd, "wb")) == nullptr) {
+        fprintf(stderr, "llav-readout: cannot set up the answer channel\n");
+        return 1;
+    }
+
     llama_backend_init();
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = args.ngl;
@@ -188,7 +200,7 @@ int main(int argc, char ** argv) {
     ctx_params.n_threads_batch = args.threads;
     // No swa_full, unlike llama-server's --swa-full: the helper only extends a resident prefix forward, which
     // needs just the last window, and a full cache over (seq + 1) * ctx positions cost 2.6 GB more on Gemma 3
-    // 1B for identical answers (agent_docs/research.md).
+    // 1B for identical answers (agent_docs/comparisons.md).
     llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (ctx == nullptr) {
         fprintf(stderr, "llav-readout: cannot create a context\n");

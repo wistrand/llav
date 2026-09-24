@@ -8,7 +8,7 @@ header is template text, appended to the template tail and tokenized with specia
 `low_mass` is the candidate mass below which an answer is flagged as one the options do not fit. It is a
 display cue measured per model family: Qwen3.5-4B puts about 0.999 on the letters and 0.57 on a question no
 option fits; Muse Glimmer answers correctly at a median of 0.62, and answers below 0.35 were right 35% of the
-time against 86% above (agent_docs/research.md).
+time against 86% above (agent_docs/comparisons.md).
 """
 
 from __future__ import annotations

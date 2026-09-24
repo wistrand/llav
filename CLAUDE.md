@@ -63,9 +63,13 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - [agent_docs/design.md](agent_docs/design.md): API compatibility decisions: how each question type maps to
   options, confidence and score formulas, aliases, usage semantics, error format, deliberate differences
   from Jev.
-- [agent_docs/research.md](agent_docs/research.md): the measurements behind the design (prompt fidelity,
-  agreement with SemIf's reference, timings, other models, labelled accuracy, calibration, option order, a
-  comparison with CLM, approaches tried and rejected) and open questions.
+- [agent_docs/research.md](agent_docs/research.md): measurements of llav's readout: prompt fidelity against
+  SemIf's reference, labelled accuracy, calibration, option order, candidate mass, approaches rejected.
+  Read before changing the prompt, the readout or calibration.
+- [agent_docs/performance.md](agent_docs/performance.md): where a request's time goes, state reuse, the
+  native helper, timings per machine, scaling estimates. Read before changing anything on the hot path.
+- [agent_docs/comparisons.md](agent_docs/comparisons.md): other models under llav (screening, Muse Glimmer)
+  and other System One systems (CLM, Laya, von) on the same labelled questions.
 - [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps, plus the readout,
   native-helper and calibration traps. Skim before touching llama-server flags, the readout, option
   handling, the helper, or calibration.

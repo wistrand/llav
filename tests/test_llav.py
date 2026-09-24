@@ -492,6 +492,9 @@ class FakeEngine:
     def __init__(self, error=None):
         self.error = error
 
+    def backend_status(self):
+        return {"prefix_reuse": "trim"}
+
     def evaluate(self, state, questions):
         if self.error:
             raise self.error
@@ -596,10 +599,30 @@ class NativeReadoutTest(unittest.TestCase):
             "a": {"type": "noul", "instructions": "q1"},
             "b": {"type": "noul", "instructions": "q2"},
         }))
+        self.assertEqual(engine.backend_status(), {"prefix_reuse": "native"})
         with mock.patch("sys.stderr"):
             results, _, _ = engine.evaluate({"ticket": "x"}, questions)
         self.assertEqual(len(results), 2)  # answered by llama-server instead
         self.assertIsNone(engine.native)
+        status = engine.backend_status()  # /v1/models reports the fallback, and why
+        self.assertEqual(status["prefix_reuse"], "slot-file")
+        self.assertIn("helper", status["native_error"])
+
+    def test_a_malformed_answer_quotes_the_helper_and_stops_it(self):
+        script = Path(tempfile.mkdtemp()) / "noisy.py"
+        script.write_text("#!/usr/bin/env python3\nimport sys\n"
+                          "sys.stderr.write('llav-readout ready: protocol 2\\n'); sys.stderr.flush()\n"
+                          "sys.stdin.buffer.read(4)\n"
+                          "sys.stderr.write('CUDA error: out of memory\\n'); sys.stderr.flush()\n"
+                          "sys.stdout.write('garbage!'); sys.stdout.flush()\n"
+                          "sys.stdin.read()\n")
+        script.chmod(0o755)
+        readout = NativeReadout(str(script), Path("model.gguf"), [10, 20], 4096, max_questions=4)
+        self.addCleanup(readout.close)
+        with self.assertRaisesRegex(NativeError, "malformed response: .*out of memory"):
+            readout.evaluate([1, 2], [[3]])
+        readout.kill()
+        readout.process.wait(timeout=5)
 
 
 class OpenApiTest(unittest.TestCase):
@@ -675,6 +698,12 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(headers["x-llav-candidate-mass"], "0.9988")
         self.assertEqual(headers["x-llav-calibration"], "none")
         self.assertFalse(headers["closed"])
+
+    def test_models_report_the_engines_current_state(self):
+        port = self.serve()
+        status, _, data = self.exchange(port, "GET /v1/models HTTP/1.1\nHost: x\nConnection: close\n")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["data"][0]["backend"]["prefix_reuse"], "trim")
 
     def test_bad_content_length_is_rejected_and_closes(self):
         port = self.serve()
