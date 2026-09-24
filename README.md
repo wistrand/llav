@@ -140,7 +140,9 @@ their respective owners. llav reproduces the public request/response shape, not 
 - **`state`** is the text the questions are about: a nonempty string, or a JSON object or array.
 - **`model`** is the served model id, `llav-latest` or `jev-latest` (`--no-jev-alias` refuses the last).
 - **`questions`** maps your keys to questions, each with a `type`, `instructions` (string, object or array)
-  and `criteria`:
+  and `criteria`. Write the actual question in `instructions` ("Do mitochondria play a role in leaf
+  remodelling?"), not a generic one that points into the state ("Is the answer to the research question
+  yes?"): on medical yes/no questions that raised accuracy from 80.7% to 86.0%.
 
 | Type | `criteria` | Answer |
 |---|---|---|
@@ -231,8 +233,11 @@ measured with `scripts/evaluate.py`. ECE is the expected calibration error of th
 - Trained open System One models scored lower on the same questions: Laya 73.0 to 74.8% (its
   `typed-decisions` checkpoint is better calibrated, ECE 0.042), von 76.4%, CLM 39.7%. The encoders are
   about three times faster and win on news-topic classification.
-- The per-source numbers, the order analysis, calibration and the comparisons with Muse Glimmer 30B, Laya,
-  von and CLM are in [agent_docs/research.md](agent_docs/research.md) and
+- On two of Jevals' published tasks, rebuilt item for item, llav scored a Decision Score of 46.5 on PubMedQA
+  (Jev 69.0; von and Laya near guessing) and -11.1 on HelpSteer2 helpfulness (Jev 9.2, and no model clearly
+  beats guessing there).
+- The per-source numbers, the order analysis, calibration and the comparisons with Jevals, Muse Glimmer 30B,
+  Laya, von and CLM are in [agent_docs/research.md](agent_docs/research.md) and
   [agent_docs/comparisons.md](agent_docs/comparisons.md).
 
 ## Performance

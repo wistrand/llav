@@ -11,6 +11,7 @@ with an Intel Arc B390 iGPU, llama.cpp build 10809, Q8_0 GGUFs.
 - Comparison with CLM
 - Muse Glimmer 30B, a test
 - Comparison with Laya and von
+- Against the Jevals board
 - Open questions
 
 ## The System One landscape
@@ -380,6 +381,99 @@ the helper wrote is lost; running out of GPU memory is the likely cause (inferen
 answers on a private channel with stdout pointed at stderr, a failure quotes its stderr, llav stops a dropped
 helper, and `/v1/models` reports the fallback with `native_error`. A second run with both encoders loaded
 (20 GB in use) did not fail, so whether the stray output caused the first failure is unconfirmed.
+
+## Against the Jevals board
+
+[Jevals](https://jevals.com/) scores Jev and six LLMs on the same 300 items per task against human labels
+(release 2026-09-18, suite 0.1.0, CC-BY-4.0). `scripts/evaluate.py fetch` rebuilds two of its tasks item for
+item: Jevals' own instructions, criteria and labels, with every text checked against its published hash
+(600 of 600 matched, and the label counts match the suite's). `score` reports Jevals' Decision Score (dscore),
+100 x (1 - loss / loss of answering the label base rates), Brier for noul and ranked probability score for
+score; recomputed from Jevals' logs it reproduces Jev's 69.03 and 9.20. Run on 2026-09-24 on the RTX PRO
+4000 box, llav with Qwen3.5-4B and the native helper, uncalibrated.
+
+The two tasks:
+
+- **PubMedQA** (noul): passages from a medical research paper and a research question; is the answer yes?
+  62% of the answers are yes.
+- **HelpSteer2 helpfulness** (score): a prompt and a chatbot's reply; how helpful was the reply, on five
+  levels from "not helpful at all" to "extremely helpful"? Rated by human annotators.
+
+How to read the numbers:
+
+- **Decision Score** rates the probabilities, not only the answer. 0 is what always answering the label
+  frequencies scores (on PubMedQA, "62% yes" for every question, without reading it); 100 is always right
+  with full confidence; below 0 is worse than that blind guess, which confident mistakes cause.
+- **Accuracy** is the share of items where the most probable answer was the right one. The last row answers
+  with the label frequencies without reading anything: that is a score of 0 by definition, and its accuracy
+  is that of always picking the most common label.
+
+| System                              | PubMedQA score | PubMedQA accuracy | HelpSteer2 score | HelpSteer2 accuracy |
+|-------------------------------------|---------------:|------------------:|-----------------:|--------------------:|
+| Gemini 3.8 Flash                    |           73.0 |             92.5% |              4.6 |               42.4% |
+| Jev                                 |           69.0 |             91.3% |              9.2 |               41.3% |
+| Qwen3.8 Flash                       |           62.4 |             89.7% |             -1.4 |               36.1% |
+| GLM-5.3                             |           60.6 |             88.7% |              7.8 |               43.0% |
+| Mistral Medium 3.5                  |           58.0 |             88.8% |            -13.7 |               43.9% |
+| Mercury 2.5                         |           55.7 |             87.1% |             -5.5 |               41.7% |
+| DeepSeek V4.1 Flash                 |           47.5 |             83.7% |            -19.0 |               34.7% |
+| **llav, Qwen3.5-4B**                |       **46.5** |         **80.7%** |        **-11.1** |           **39.0%** |
+| llav, temperature fitted (held out) |           47.4 |             80.7% |             -6.3 |               39.0% |
+| von 1.2                             |            7.7 |             68.3% |            -17.0 |               37.3% |
+| Laya typed-decisions                |           -6.3 |             62.3% |              6.2 |               37.3% |
+| Laya English                        |          -31.3 |             59.3% |              2.0 |               35.0% |
+| Label frequencies, reads nothing    |              0 |             62.0% |                0 |               41.7% |
+
+The first seven rows are Jevals' board; the llav, von and Laya rows were run here the same day. Laya's
+English checkpoint reads at most 512 tokens and its typed-decisions checkpoint 1,024, so the longer
+PubMedQA passages and HelpSteer2 replies were cut short for them. "Temperature fitted (held out)" corrects llav's overconfidence with a
+temperature fitted on half of each task and scored on the other half, both ways round; it changes how sure
+llav is, never which answer it picks, so accuracy stays the same.
+
+- **PubMedQA: last, just behind DeepSeek V4.1 Flash.** 80.7% right against Jev's 91.3%. The questions ask
+  whether biomedical passages support a yes, a harder reading task than most of llav's own set. A fitted
+  temperature (1.27) adds under a point: the misses are wrong answers, not overconfidence.
+- **The small trained encoders cannot read these passages.** On PubMedQA von (68.3%) and Laya (59.3 to 62.3%)
+  are at or near the 62% that answering yes every time gets; their scores run from 7.7 down to -31.3. On
+  llav's own set they were 6.5 to 10 points behind; here the gap to llav is 12 to 21 points of accuracy. Why
+  is below.
+- **HelpSteer2: nobody beats guessing by much.** Every score is within 20 points of 0, and every accuracy is
+  within a few points of the 41.7% that always answering "extremely helpful" gets; llav's 39.0% is below it.
+  llav's -11.1 rises to -6.3 with a temperature of 2.3, between Mercury 2.5 and Mistral Medium 3.5. Jevals'
+  own verdict is that no model clearly beats the label base rates here.
+- **Not identical conditions.** Jevals asked each item five times; llav is deterministic, so one pass stands
+  for all five. Its LLM rows reason (at a low setting) and state their probabilities in text; Jev and llav
+  read them from the model. Jevals' latencies are over the network; llav's 600 answers took 76 s on the box.
+- Jevals' third task, Banking77 with all 77 intents, needs more than llav's 26 options and was not run.
+
+**Why the encoders fail on PubMedQA.** Jevals puts the research question inside the state and gives every item
+the same instruction, "is the answer to the research question yes?". The same 300 items were run again, the
+same day, with each item's own research question as the instruction and only the passages as the state
+(a scratch variant, not in `fetch`):
+
+| PubMedQA, 300 items  | Says yes, Jevals' format | Right on no, Jevals' format | Accuracy (score), Jevals' format | Accuracy (score), question as instruction | Right on yes / no, question as instruction |
+|----------------------|-------------------------:|----------------------------:|---------------------------------:|------------------------------------------:|-------------------------------------------:|
+| llav, Qwen3.5-4B     |                      164 |                         84% |                     80.7% (46.5) |                          **86.0% (57.0)** |                                  87% / 84% |
+| von 1.2              |                      229 |                         39% |                      68.3% (7.7) |                               64.7% (4.0) |                                  60% / 73% |
+| Laya typed-decisions |                      291 |                          4% |                     62.3% (-6.3) |                               66.0% (7.3) |                                  89% / 29% |
+| Laya English         |                      274 |                          8% |                    59.3% (-31.3) |                              63.7% (-2.1) |                                  88% / 24% |
+
+The truth is 186 yes and 114 no.
+
+- **Mainly, the encoders cannot tell a yes item from a no item.** With the question stated directly, von's
+  probability of yes stays between 0.36 and 0.63 for 80% of items, and Laya typed-decisions' between 0.45
+  and 0.70: near a coin toss whatever the passages say. llav's runs from 0.02 to 1.00. Answering needs
+  reading findings such as "no significant difference" against the question; these ModernBERT-sized
+  encoders, trained for classification, routing and simple entailment, do not do that reading (inference,
+  consistent with their 20 to 65 point deficit on SemIf's evidence and rule items above).
+- **Jevals' format makes it worse, most for Laya.** With the generic instruction Laya answers yes almost
+  regardless: 4 to 8% right on the no items. The item's own question lifts it about 4 points of accuracy.
+- **Truncation is a minor factor.** The median state is about 1,450 characters, roughly 350 tokens, inside
+  even Laya's 512. Accuracy falls clearly only on the 11 states over 2,000 characters.
+- **llav also gains from the question as instruction**: 80.7% to 86.0%, and a Decision Score of 57.0 that
+  would sit between GLM-5.3 and Mistral Medium 3.5 on the board. The comparable number stays 46.5, since every
+  row on the board used Jevals' format. The wording advice this gives callers is in
+  [design.md](design.md#question-mapping).
 
 ## Open questions
 

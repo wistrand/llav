@@ -1020,6 +1020,28 @@ class EvaluateMetricsTest(unittest.TestCase):
             self.evaluate.main(["fit", str(mixed), "--gguf", str(model), "--out", str(directory / "mixed.json")])
         self.assertTrue((directory / "mixed.json").exists())
 
+    def test_decision_score_matches_jevals_definition(self):
+        noul = [{"type": "noul", "probs": {"true": p, "false": 1 - p}, "label": label}
+                for p, label in ((0.9, "true"), (0.2, "false"), (0.6, "true"), (0.7, "false"))]
+        # Brier against a prior of 0.5 (two of each label), which scores 0.5 per item.
+        loss = ((0.1 ** 2) * 2 + (0.2 ** 2) * 2 + (0.4 ** 2) * 2 + (0.7 ** 2) * 2) / 4
+        self.assertAlmostEqual(self.evaluate.decision_score(noul), 100 * (1 - loss / 0.5))
+        perfect = [{"type": "score", "probs": {"0": 0.0, "1": 1.0, "2": 0.0}, "label": "1"},
+                   {"type": "score", "probs": {"0": 1.0, "1": 0.0, "2": 0.0}, "label": "0"}]
+        self.assertAlmostEqual(self.evaluate.decision_score(perfect), 100.0)
+        # Ranked probability score: a miss by two levels costs more than a miss by one.
+        loss = self.evaluate._decision_loss
+        self.assertLess(loss([0, 1, 0], 0, True), loss([0, 0, 1], 0, True))
+        self.assertIsNone(self.evaluate.decision_score(perfect + noul))  # mixed types have no single base rate
+        self.assertIsNone(self.evaluate.decision_score([{"probs": {"a": 1.0}, "label": "a"}]))
+
+    def test_jevals_state_is_rebuilt_as_it_was_hashed(self):
+        row = {"question": "Does X help?", "context": {"contexts": ["First.", "Second, näive."], "labels": ["A"]}}
+        state = self.evaluate.jevals_state(row, ["question", "context.contexts"])
+        self.assertEqual(state, {"question": "Does X help?", "context": ["First.", "Second, näive."]})
+        self.assertEqual(json.dumps(state, separators=(",", ":"), ensure_ascii=False),
+                         '{"question":"Does X help?","context":["First.","Second, näive."]}')
+
     def test_geometric_mean_cancels_a_constant_position_preference(self):
         # The same judgement seen through a bias towards whichever option is displayed first.
         rows = [{"a": 0.8, "b": 0.2}, {"a": 0.5, "b": 0.5}]

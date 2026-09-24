@@ -65,6 +65,13 @@ rendered template, never from a model name; `--assistant-prefix` overrides it. T
 
 `instructions` and structured criteria are placed into the JSON payload as JSON values, not stringified.
 
+Put the actual question in `instructions`, not inside the state behind a generic instruction. On Jevals'
+PubMedQA items, "is the answer to the research question yes?" with the question inside the state gave 80.7%
+accuracy; the item's own research question as the instruction gave 86.0%, same model and passages
+([comparisons.md](comparisons.md#against-the-jevals-board)). The prompt names `instructions` the criterion,
+and the model likely weighs it as the thing to decide (inference). llav cannot move a question out of the
+state for the caller.
+
 ## Answers
 
 Built by `build_answer` (`questions.py`):

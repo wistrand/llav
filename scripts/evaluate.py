@@ -18,7 +18,14 @@ talk only the System One API, so `--model` points them at another server of that
 over the declared options (so a noul's is twice the binary Brier score); negative log-likelihood of the
 label; expected calibration error (ECE) of the top answer's probability over ten equal-width bins; coverage,
 the largest share of questions that can be answered automatically, most confident first, while keeping the
-error rate at or under 1%, 5% or 10%; and accuracy split by candidate mass.
+error rate at or under 1%, 5% or 10%; accuracy split by candidate mass; and, per source of one question
+type, Jevals' Decision Score (dscore: 100 x (1 - loss / loss of answering the label base rates), with the
+Brier score for noul and choice and the ranked probability score for score).
+
+`fetch` also rebuilds two Jevals tasks item for item (jevals.com, release 2026-09-18, CC-BY-4.0): PubMedQA
+(noul) and HelpSteer2 helpfulness (score), 300 items each, with Jevals' own wording and labels and each text
+checked against its published hash. Their dscore compares with the board's numbers for Jev and six LLMs.
+Jevals' third task, the full 77-intent Banking77, exceeds llav's 26 options and is not fetched.
 
 `shifts` asks every choice and score question once per cyclic rotation of its options, all rotations in one
 request so they share the state. It reports how often the answer changes with the order, how far the
@@ -64,6 +71,10 @@ ERROR_TARGETS = (0.01, 0.05, 0.10)
 LOW_MASS = 0.9
 
 ROWS_API = "https://datasets-server.huggingface.co/rows"
+# Jevals (jevals.com, CC-BY-4.0) publishes the items, wording and labels it scores Jev and six LLMs on, but not
+# the texts; those come from the public datasets. Pinned to one data commit so the item list cannot move.
+JEVALS_SUITE = ("https://raw.githubusercontent.com/Jevals/jevals-data/21bb47b72814cf661539b313844d2d2e26166e54/"
+                "suites/0.1.0/{bench}.json")
 AG_NEWS = {"World": "World news, politics and international affairs", "Sports": "Sports",
            "Business": "Business, companies and the economy", "Sci/Tech": "Science and technology"}
 DBPEDIA = {
@@ -201,8 +212,53 @@ def semif_authored(path: Path) -> list[dict]:
     return items
 
 
+def jevals_state(row: dict, fields: list[str]) -> dict:
+    """The state Jevals sends: each field under its first path segment, so `context.contexts` becomes
+    `{"context": [...]}`. Its hash is over the compact JSON, as JavaScript's JSON.stringify writes it."""
+    state = {}
+    for field in fields:
+        value = row
+        for part in field.split("."):
+            value = value[part]
+        state[field.split(".")[0]] = value
+    return state
+
+
+def fetch_jevals(bench: str) -> list[dict]:
+    """A Jevals task, item for item: its questions verbatim, its labels, the texts rebuilt from the dataset.
+
+    Jevals' Decision Score for these items is on its board (release 2026-09-18), so `score` output for them
+    compares with Jev directly. A text whose hash differs from Jevals' is dropped, not scored: the dataset
+    changed since Jevals sampled it, and the item would no longer be the same.
+    """
+    suite = _get_json(JEVALS_SUITE.format(bench=bench))
+    needed = {item["row_idx"] for item in suite["items"]}
+    rows = {}
+    for offset in sorted({index // 100 * 100 for index in needed}):
+        page, _ = _page(suite["dataset"], suite["config"], suite["split"], offset, 100)
+        rows.update({offset + position: row for position, row in enumerate(page)})
+    question = {"type": suite["primitive"], "instructions": suite["instructions"], "criteria": suite["criteria"]}
+    items, dropped = [], 0
+    for item in suite["items"]:
+        row = rows.get(item["row_idx"])
+        state = jevals_state(row, suite["state_fields"]) if row else None
+        text = json.dumps(state, separators=(",", ":"), ensure_ascii=False) if state else ""
+        if hashlib.sha256(text.encode()).hexdigest() != item["state_sha256"]:
+            dropped += 1
+            continue
+        option = suite["options"][item["target"]]
+        label = option == "yes" if suite["primitive"] == "noul" else item["target"]
+        items.append({"id": item["item_id"], "source": f"jevals_{bench}", "state": state, "question": question,
+                      "label": label})
+    if dropped:
+        print(f"jevals_{bench}: {dropped} of {len(suite['items'])} texts differ from Jevals' and were left out")
+    return items
+
+
 FETCHERS = {"boolq": fetch_boolq, "ag_news": fetch_ag_news, "dbpedia": fetch_dbpedia,
-            "banking_cards": fetch_banking_cards, "yelp_stars": fetch_yelp}
+            "banking_cards": fetch_banking_cards, "yelp_stars": fetch_yelp,
+            "jevals_pubmedqa": lambda rows: fetch_jevals("pubmedqa"),
+            "jevals_helpsteer2": lambda rows: fetch_jevals("helpsteer2")}
 
 
 def fetch(args) -> None:
@@ -304,7 +360,41 @@ def metrics(records: list[dict]) -> dict:
     bins = reliability(confidence, correct)
     ece = sum(count * abs(accuracy - mean) for count, mean, accuracy in bins if count) / n
     return {"n": n, "accuracy": sum(correct) / n, "brier": brier, "nll": nll, "ece": ece, "bins": bins,
-            "coverage": {target: coverage(confidence, correct, target) for target in ERROR_TARGETS}}
+            "coverage": {target: coverage(confidence, correct, target) for target in ERROR_TARGETS},
+            "decision": decision_score(records)}
+
+
+def _decision_loss(probs: list[float], target: int, ordinal: bool) -> float:
+    if not ordinal:
+        return sum((p - (index == target)) ** 2 for index, p in enumerate(probs))
+    # Ranked probability score: squared gaps between the cumulative distributions, over K - 1 cut points.
+    total = cumulative = 0.0
+    for index, p in enumerate(probs[:-1]):
+        cumulative += p
+        total += (cumulative - (index >= target)) ** 2
+    return total / (len(probs) - 1)
+
+
+def decision_score(records: list[dict]) -> float | None:
+    """Jevals' Decision Score: 100 x (1 - loss / loss of always answering the label base rates).
+
+    The loss is the multiclass Brier score for noul and choice and the ranked probability score for score,
+    whose levels are ordered. None for records of mixed or unknown question types, where it means nothing.
+    Checked against Jevals' board: it reproduces Jev's 69.03 (PubMedQA) and 9.20 (HelpSteer2) from their logs.
+    """
+    kinds = {record.get("type") for record in records}
+    if len(kinds) != 1 or None in kinds:
+        return None
+    ordinal = kinds == {"score"}
+    keys = list(records[0]["probs"])
+    if ordinal:
+        keys.sort(key=int)
+    targets = [keys.index(record["label"]) for record in records]
+    prior = [targets.count(index) / len(targets) for index in range(len(keys))]
+    loss = statistics.fmean(_decision_loss([record["probs"][key] for key in keys], target, ordinal)
+                            for record, target in zip(records, targets))
+    base = statistics.fmean(_decision_loss(prior, target, ordinal) for target in targets)
+    return 100 * (1 - loss / base) if base else None
 
 
 def reliability(confidence: list[float], correct: list[bool]) -> list[tuple[int, float, float]]:
@@ -344,12 +434,13 @@ def geometric_mean(rows: list[dict]) -> dict:
 
 def _row(name: str, result: dict) -> str:
     cov = " ".join(f"{100 * result['coverage'][target][0]:5.1f}%" for target in ERROR_TARGETS)
+    decision = "     -" if result["decision"] is None else f"{result['decision']:6.1f}"
     return (f"{name:28} {result['n']:5} {100 * result['accuracy']:6.1f}% {result['brier']:6.3f} "
-            f"{result['nll']:6.3f} {result['ece']:6.3f}  {cov}")
+            f"{result['nll']:6.3f} {result['ece']:6.3f}  {cov}  {decision}")
 
 
 HEADER = (f"{'source':28} {'n':>5} {'acc':>7} {'brier':>6} {'nll':>6} {'ece':>6}  "
-          + " ".join(f"{'cov@' + str(round(100 * t)) + '%':>6}" for t in ERROR_TARGETS))
+          + " ".join(f"{'cov@' + str(round(100 * t)) + '%':>6}" for t in ERROR_TARGETS) + f"  {'dscore':>6}")
 
 
 def report(groups: dict[str, list[dict]]) -> None:
