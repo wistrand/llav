@@ -11,9 +11,10 @@ once and reuses it for every question; evaluated states are cached as slot files
 
 ```
 client ──HTTP──> server.py ──> questions.py (validate, build answers)
-                     │
+                     │    └──> calibration.py (optional temperature, --calibration)
                      └──> engine.py ──HTTP──> llama-server (managed by runtime.py, or external)
-                            prompt.py builds the prompt
+                            │ prompt.py builds the prompt
+                            └──pipe──> llav-readout (optional native helper, native.py)
 ```
 
 ## Layout
@@ -62,9 +63,11 @@ Quick start lists install options per platform; `native/README.md` covers the op
   options, confidence and score formulas, aliases, usage semantics, error format, deliberate differences
   from Jev.
 - [agent_docs/research.md](agent_docs/research.md): the measurements behind the design (prompt fidelity,
-  agreement with SemIf's reference, timings, approaches tried and rejected) and open questions.
-- [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps. Skim before touching
-  llama-server flags, the readout, or slot handling.
+  agreement with SemIf's reference, timings, other models, labelled accuracy, calibration, option order, a
+  comparison with CLM, approaches tried and rejected) and open questions.
+- [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps, plus the readout,
+  native-helper and calibration traps. Skim before touching llama-server flags, the readout, option
+  handling, the helper, or calibration.
 
 ## Invariants
 
@@ -89,7 +92,10 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - Never let a native-readout failure fail a request: `Engine` drops the helper and answers through
   llama-server instead. The HTTP path stays the reference implementation, and the tests cover it.
 - Never ship a calibration file. Temperatures fitted on one workload miscalibrate another (see
-  agent_docs/research.md); callers fit their own with `scripts/evaluate.py fit`.
+  [agent_docs/research.md](agent_docs/research.md)); callers fit their own with `scripts/evaluate.py fit`.
+- Never change the native helper's response layout without bumping `PROTOCOL` in `native.py` and the ready
+  line in `native/llav-readout.cpp` together. A helper built from older source must be refused at startup,
+  not read with the wrong layout.
 - Keep the response body to the public System One shape: `model`, `answers`, `usage` with only
   `input_tokens` and `output_tokens`. Put llav-specific data in `X-Llav-*` headers.
 - Never present llav as Jev or TypeSafe. Responses name llav's own model id, and the README keeps its

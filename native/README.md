@@ -6,8 +6,8 @@ the question suffixes together. llav uses it only when started with `--native-re
 llama-server whenever it is absent or fails.
 
 Worth it on a fast GPU, where the per-question fixed costs dominate. A repeat request of 10 questions went
-from 1.89 s to 1.26 s on an Arc iGPU laptop and from 0.65 s to 0.34 s on an RTX 3090; five questions there
-went from 0.38 s to 0.16 s. See [../agent_docs/research.md](../agent_docs/research.md) for the full numbers.
+from 1.73 s to 1.22 s on an Arc iGPU laptop and from 0.65 s to 0.21 s on an RTX 3090. See
+[../agent_docs/research.md](../agent_docs/research.md) for the full numbers.
 
 ## Build
 
@@ -54,6 +54,10 @@ one pass (default 16); a request with more goes to llama-server. `GET /v1/models
   several requests at once and the helper cannot.
 - Probabilities are not bit-identical to the llama-server path: batching changes the arithmetic. Measured
   differences are 1.3e-5 for an attention model and 0.002 for Qwen3.5, against 0.02 between machines.
+  Within one batch on CUDA, identical prompts in different sequences differed by up to 0.09 (median 0) on
+  Qwen3.5; no answer changed.
 - The helper exits when llav closes its input, so it cannot outlive the server that started it.
 - Rebuild the helper when llama.cpp is upgraded. It uses the C API, so a mismatch is a compile error rather
   than silent corruption.
+- Rebuild it when `native/llav-readout.cpp` changes, too. Its ready line names the protocol version, and llav
+  refuses a helper built from older source ("rebuild it from native/") rather than misread its answers.

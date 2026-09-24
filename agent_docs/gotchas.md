@@ -37,6 +37,14 @@
   state alone ("Candidate A" with keys `first`, `second`) are not covered.
 - **The native helper's protocol is versioned in its ready line.** A binary built before the candidate-mass
   normalizer was added is refused at startup with "rebuild it from native/". Rebuild after pulling.
+- **Reading llama.cpp's logits buffer is slow.** A serial pass over the 248k-entry vocabulary per question
+  cost about 19 ms on the RTX PRO 4000 box, against 1.5 ms over an ordinary array, and made a repeat request
+  2.5 times slower. `log_normalizers` in the helper vectorizes and threads it; keep any new per-logit work
+  there (see [research.md](research.md#the-normalizers-cost-in-the-native-helper)).
+- **A calibration file is tied to one model file and one prompt version.** llav refuses it for any other,
+  so bumping `PROMPT_VERSION` or changing the pinned GGUF invalidates every caller's file; say so in the
+  change. `scripts/evaluate.py fit` refuses predictions scored against a calibrated llav
+  (`X-Llav-Calibration` other than `none`), since fitting on calibrated numbers would compound them.
 - **Labels must be single tokens with a clean boundary.** `Engine.__init__` refuses to start if any of
   `A`–`Z` is not one token, and `_boundary_ok` rejects a chat template whose tail merges with a label. A
   new model or template can fail here at startup.

@@ -17,9 +17,15 @@ llav and the reference disagree, check the current reference before changing any
 public shape, not an SDK. TypeSafe also documents `GET /v1/models`; its response shape is not published, so
 llav's `/v1/models` body is its own (inferred OpenAI-style list).
 
+Questions carry their kind in a `type` field (`{"type": "noul", "instructions": ...}`), as TypeSafe's docs
+state: "A `Question` is one of three types, set by its `type` field" (checked 2026-09-24). CLM's README shows
+the kind as a wrapper key instead (`{"noul": {...}}`); its server accepts `type`, like llav. CLM also takes a
+`temperature` field in the request body, which llav, following TypeSafe's shape, rejects as unknown.
+
 ## Question mapping
 
-Every question becomes one decision over 2 to 26 options, labelled `A`, `B`, … in order. What the model
+Every question becomes one decision over 2 to 26 options, labelled `A`, `B`, … in order, except that a
+single-letter choice key takes its own letter (see below). What the model
 reads for each option is built in `parse_question` (`questions.py`):
 
 | Type     | Options, in order                 | What the model reads per option                                                               |
@@ -85,6 +91,11 @@ unchanged; responses always carry llav's own id.
 - Candidate mass goes in `X-Llav-Candidate-Mass`, not in the answers, for the same reason. It is the share of
   the full vocabulary on the declared labels, from OneForward's `candidate_mass`. It flags a model that did
   not answer with a letter; it is not calibration.
+- `X-Llav-Candidate-Mass` is positional, in the order of `answers`. Two known limits, both unhandled: it
+  grows by about 7 bytes per question, so a request with several hundred questions produces a header some
+  proxies reject; and a JavaScript client that sends hand-written JSON with integer-like question keys gets
+  `answers` back reordered by its JSON parser, which puts integer keys first, so positions no longer line
+  up. Clients that build the body from their own parsed object are unaffected.
 - Timing and sharing details go in `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`, not in `usage`, so
   strict clients that validate `usage` keep working.
 

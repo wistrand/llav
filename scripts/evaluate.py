@@ -11,7 +11,8 @@
     {"id": "...", "source": "ag_news", "state": ..., "question": {System One question}, "label": ...}
 
 `label` is `true` or `false` for a noul, the option key for a choice, and the level index for a score. Any
-file in that format works, so a caller's own labelled data can be scored the same way.
+file in that format works, so a caller's own labelled data can be scored the same way. `score` and `shifts`
+talk only the System One API, so `--model` points them at another server of that shape, such as CLM.
 
 `score` asks every question once, as a caller would, and reports per source: accuracy; Brier score summed
 over the declared options (so a noul's is twice the binary Brier score); negative log-likelihood of the
@@ -228,8 +229,16 @@ def fetch(args) -> None:
 
 # Asking
 
+MODEL = "llav-latest"  # --model changes it, to score another System One server such as CLM
+
+
+def use_model(name: str) -> None:
+    global MODEL
+    MODEL = name
+
+
 def ask(url: str, state, questions: dict) -> tuple[dict, dict]:
-    body = json.dumps({"state": state, "model": "llav-latest", "questions": questions}).encode()
+    body = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode()
     request = urllib.request.Request(url + "/v1/systemone", data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=900) as response:
         return json.load(response), dict(response.headers)
@@ -240,8 +249,8 @@ def served_model_file(url: str) -> str | None:
     try:
         with urllib.request.urlopen(url + "/v1/models", timeout=30) as response:
             return json.load(response)["data"][0]["backend"].get("model_file")
-    except (OSError, ValueError, KeyError, IndexError):
-        return None
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None  # not llav, or an older one
 
 
 def load(paths: list[str], limit: int | None) -> list[dict]:
@@ -408,7 +417,7 @@ def score(args) -> None:
 def print_mass(records: list[dict]) -> None:
     known = [record for record in records if record["mass"] is not None]
     if not known:
-        print("candidate mass not reported (llav predates X-Llav-Candidate-Mass)")
+        print("candidate mass not reported (not llav, or an llav without X-Llav-Candidate-Mass)")
         return
     low = [record for record in known if record["mass"] < LOW_MASS]
     high = [record for record in known if record["mass"] >= LOW_MASS]
@@ -641,6 +650,7 @@ def main(argv=None) -> None:
         command.add_argument("--limit", type=int, help="At most this many questions per file")
         command.add_argument("--out", help="Write per-question results as JSONL, for later analysis")
         command.add_argument("--progress", action="store_true", help="Show a counter on stderr")
+        command.add_argument("--model", default=MODEL, help="Model name to request (default: llav-latest)")
         if name == "shifts":
             command.add_argument("--max-shifts", type=int, default=26, help="At most this many rotations")
         command.set_defaults(run=function)
@@ -651,6 +661,7 @@ def main(argv=None) -> None:
     command.add_argument("--out", required=True, help="Calibration file to write")
     command.set_defaults(run=fit)
     args = parser.parse_args(argv)
+    use_model(getattr(args, "model", MODEL))
     args.run(args)
 
 

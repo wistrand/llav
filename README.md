@@ -11,21 +11,36 @@
 ╰───────────────────────────╯
 ```
 
-Typed semantic decisions from a local open model, served over an HTTP API shaped like TypeSafe's
-System One API (`POST /v1/systemone`).
+Ask a local language model yes/no, multiple-choice and rating questions about a piece of text, and get
+probabilities back instead of generated text:
+
+```
+text:      "Help! My payouts have been failing for 3 days."
+question:  Which team should handle this? billing / technical / sales
+answer:    billing 0.85, technical 0.15, sales 0.00
+```
+
+llav runs a small open model ([Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) through
+[llama.cpp](https://github.com/ggml-org/llama.cpp)) on your own machine. Each question is one forward pass:
+llav reads how likely the model is to answer with each option's letter. Nothing is generated, so there is
+no output to parse and no reasoning to wait for. It suits programs that need a quick judgement about text,
+such as routing support tickets or deciding whether an agent's next step needs a human.
+
+The HTTP API has the same shape as TypeSafe's System One API (`POST /v1/systemone`), so code written for its
+Jev model can call llav instead. The question types keep TypeSafe's names: `noul` (yes/no), `choice` (pick
+one option) and `score` (a level on a scale).
 
 *Independent project; not affiliated with or endorsed by TypeSafe. Jev and TypeSafe are the property of
 their respective owners. llav reproduces the public request/response shape, not Jev's model.*
 
-You send a `state` and a map of typed questions (`noul`, `choice`, `score`). llav asks a local model
-([Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) GGUF via
-[llama.cpp](https://github.com/ggml-org/llama.cpp)) each question in a single forward pass and reads the
-probabilities of the answer labels straight from the logits. Nothing is generated or parsed.
-
-- **No Python dependencies.** Standard library only. The runtime is `llama-server`.
+- **No Python dependencies.** Standard library only. The one runtime requirement is llama.cpp's
+  `llama-server`.
 - **Runs on any llama.cpp backend**, including Vulkan, CUDA, Metal, SYCL and CPU.
-- **Fast on repeated text.** A state is evaluated once per request and kept for later ones, so follow-up
-  questions about the same text cost about 0.2 s instead of 3 s on the laptop under Performance.
+- **Fast on repeated text.** The text is read once per request and kept for later requests, so a follow-up
+  question about the same text takes about 0.2 s instead of 3 s on a laptop (see [Performance](#performance)).
+- **Numbers you can check.** A response header flags answers where the model wanted none of the options,
+  and `scripts/evaluate.py` measures accuracy and calibration on your own labelled examples (see
+  [Accuracy](#accuracy)).
 
 ## Quick start
 
@@ -59,8 +74,9 @@ probabilities of the answer labels straight from the logits. Nothing is generate
    PYTHONPATH=src python3 -m llav --gguf ~/models/Qwen_Qwen3.5-4B-Q8_0.gguf --port 8080 --web-ui
    ```
 
-   `--web-ui` serves a page at http://localhost:8080/ for trying questions in a browser. For a `llav`
-   command on your `PATH`, for example to run it as a service, use `pipx install .`.
+   `--web-ui` serves a page at http://localhost:8080/ for trying questions in a browser. It also flags an
+   answer whose options got little of the model's probability (see `X-Llav-Candidate-Mass` below). For a
+   `llav` command on your `PATH`, for example to run it as a service, use `pipx install .`.
 
    <a href="docs/webui.png"><img src="docs/webui-thumb.png" width="480" alt="The llav web UI answering a rating and a choice question about a support ticket"></a>
 
@@ -106,7 +122,7 @@ probabilities of the answer labels straight from the logits. Nothing is generate
 
 `POST /v1/systemone` takes `{"state", "model", "questions"}`:
 
-- **`state`** is a nonempty string, object or array.
+- **`state`** is the text the questions are about: a nonempty string, or a JSON object or array.
 - **`model`** is the served model id, `llav-latest` or `jev-latest` (`--no-jev-alias` refuses the last).
 - **`questions`** maps your keys to questions, each with a `type`, `instructions` (string, object or array)
   and `criteria`:
@@ -119,7 +135,8 @@ probabilities of the answer labels straight from the logits. Nothing is generate
 
 - **A `noul`'s `criteria` are repeated in the criterion text**, because `Yes` and `No` say nothing on their
   own and some models read only the criterion. Writing the rule in `criteria`, in `instructions`, or in
-  both works the same; `choice` and `score` are untouched, since there the descriptions are the options.
+  both works the same. `choice` and `score` criteria are not repeated, since there the descriptions are the
+  options.
 - **A `choice` key that is a single letter is shown to the model at that answer letter**, so keys `B`,
   `insufficient`, `A` reach it as A, B, C. Otherwise the model confuses option names with answer letters.
   The answer keeps your keys and their order.
@@ -170,6 +187,29 @@ llama-server pass each, which cuts a repeat request of 10 questions from 0.65 s 
 [agent_docs/architecture.md](agent_docs/architecture.md) has the request flow and the slot handling, and
 [agent_docs/research.md](agent_docs/research.md) the measurements behind all of it.
 
+## Accuracy
+
+Qwen3.5-4B on 1,176 labelled questions, samples of public datasets plus SemIf's 144 authored decisions,
+measured with `scripts/evaluate.py`. ECE is the expected calibration error of the top answer's probability.
+
+| Task                                         | Accuracy |   ECE |
+|----------------------------------------------|---------:|------:|
+| DBpedia topic, 14 options                    |    98.2% | 0.013 |
+| SemIf evidence, rules and candidates, 3 each |    93.8% | 0.036 |
+| BoolQ, yes/no over a passage                 |    92.5% | 0.038 |
+| AG News topic, 4 options                     |    80.5% | 0.113 |
+| Banking77 card intents, 13 options           |    75.0% | 0.124 |
+| Yelp review stars, 5-level score             |    59.0% | 0.204 |
+
+- **Overconfident at the top.** Answers above 0.9 averaged 0.986 and were right 93% of the time. A fitted
+  temperature (`--calibration`) cut ECE from 0.069 to 0.023 on held-out questions, but what fits one task
+  miscalibrates another, so fit on your own data.
+- **Option order matters on hard choices.** Asked with every rotation of its options, 19% of choice and
+  score answers changed under some order, about a third on confusable options (Banking77, Yelp) and 4% on
+  clear ones (DBpedia).
+- The per-source numbers, the order analysis, calibration and a comparison with CLM, a trained System One
+  model, are in [agent_docs/research.md](agent_docs/research.md).
+
 ## Performance
 
 Qwen3.5-4B Q8_0, a 1,800-token state, 10 yes/no questions. "Repeat" is the same state arriving in a later
@@ -180,7 +220,8 @@ request; the last column is the same two numbers with the native helper.
 | Laptop, Intel Arc B390, Vulkan |        4.70 s | 1.73 s | 3.86 s / 1.22 s |
 | RTX 3090, CUDA                 |        1.16 s | 0.65 s | 0.75 s / 0.21 s |
 
-`scripts/benchmark.py` reproduces these. Per-phase costs, the other pinned models, an Apple M3 run,
+`scripts/benchmark.py` reproduces these. The helper column predates candidate mass, whose vocabulary pass
+added about 2 ms to such a request on an RTX PRO 4000. Per-phase costs, the other pinned models, an Apple M3 run,
 estimates for other hardware and what a text-generating baseline would cost are in
 [agent_docs/research.md](agent_docs/research.md).
 

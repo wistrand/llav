@@ -1,9 +1,10 @@
 # Research behind the design
 
-Measurements that shaped llav, made in the SemIf repository before llav existed. The probe script is
-`benchmarks/llama_server_probe.py` in SemIf; its outputs were kept outside any repository, so the numbers
-below are the record. Hardware for all timings: a laptop with an Intel Arc B390 iGPU, llama.cpp build 10809,
-Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `scripts/fetch-model.sh`).
+Measurements that shaped llav. The first sections were made in the SemIf repository before llav existed,
+with its `benchmarks/llama_server_probe.py`; those outputs were kept outside any repository, so the numbers
+below are the record. Later sections use llav's own `scripts/benchmark.py` and `scripts/evaluate.py` and
+name their date and machine. Unless a section says otherwise: a laptop with an Intel Arc B390 iGPU,
+llama.cpp build 10809, Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `scripts/fetch-model.sh`).
 
 ## Contents
 - Prompt fidelity and agreement
@@ -16,6 +17,7 @@ Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `scripts/fetch-model.sh`
 - Labelled evaluation: calibration and option order
 - Temperature calibration
 - The normalizer's cost in the native helper
+- Comparison with CLM
 - Open questions
 
 ## Prompt fidelity and agreement
@@ -201,7 +203,9 @@ Two changes on 2026-09-23, after the helper made llav's own work a visible share
   for 10 questions on an 1,800-token state went from 99 ms to 9 ms, tokens identical.
 - **The helper returns raw logits instead of normalized log-probabilities.** llav softmaxes them over the
   declared options, which cancels the normalizer, so computing it meant a pass over all 248,320 vocabulary
-  entries per question for nothing.
+  entries per question for nothing. The normalizer came back on 2026-09-24 for candidate mass, vectorized
+  and threaded so it costs about 2 ms per 10-question request; see "The normalizer's cost in the native
+  helper" below.
 
 Effect on a repeat request of 10 questions, same workload as above:
 
@@ -644,6 +648,23 @@ Geometric mean over rotations against the caller's order:
   cyclic shift is the wrong perturbation for an ordinal scale (inference).
 - Cost: K passes per question. On the GPU box with the native helper a rotation cost about 55 ms.
 
+How many orders does averaging need? Recomputed offline from the same rotations, leaving out candidate
+selection (fixed since by `_align_letters`) and Yelp (rotation breaks a scale's order), 832 questions:
+
+| Averaged over           | Accuracy |   NLL |   ECE | Coverage at 5% error |
+|-------------------------|---------:|------:|------:|---------------------:|
+| Caller's order          |    86.1% | 0.618 | 0.061 |                76.5% |
+| 2 orders (0 and K/2)    |    87.2% | 0.559 | 0.066 |                79.0% |
+| 3 orders, evenly spaced |    87.4% | 0.520 | 0.070 |                79.7% |
+| All K                   |    87.6% | 0.518 | 0.069 |                79.8% |
+
+- Three orders get nearly all of the full average's gain at 3 passes instead of up to 14.
+- The gain is small but not noise: across Banking77 and AG News, averaging fixed 14 answers and broke 4.
+- Averaging does not calibrate: ECE rises as the combined answers sharpen. A temperature would have to be
+  fitted on averaged probabilities.
+- Not implemented in llav. An opt-in form would be three orders, choice questions only, requested per call
+  by a header, since the body has no room for it.
+
 ## Temperature calibration
 
 `scripts/evaluate.py fit` on the `score` predictions above (after the letter fix), 2026-09-24, same box. One
@@ -671,8 +692,8 @@ overconfident on every type.
   answers that were right. This is why llav ships no calibration file: fit on the workload the thresholds
   will run on.
 - `fit` now refuses the DBpedia and SemIf per-source fits in this table: DBpedia has 4 wrong answers in 224
-  and SemIf 12 in 144, below MIN_ERRORS (5) per half, where the temperature is not pinned down. Their rows
-  above come from before that guard.
+  and SemIf 12 in 144, below `MIN_ERRORS` (`scripts/evaluate.py`) per half, where the temperature is not
+  pinned down. Their rows above come from before that guard.
 - Banking77 fitted alone did worse held out (0.100) than pooled (0.047). Each half has about 100 questions;
   one temperature from 100 labels is noisy. Treat a few hundred labels per workload as the minimum
   (inference from this one case).
@@ -692,16 +713,63 @@ in a microbenchmark (why is not investigated; the logits buffer's memory is the 
 helper uses a polynomial exp (at most 5e-6 relative error) that the compiler vectorizes and splits the
 vocabulary across `--threads`: 124 ms, 2 ms above not computing it at all.
 
+## Comparison with CLM
+
+[CLM](https://github.com/Contrastive-LM/CLM) (commit 7956937, head `CLM-v0.1-8B`, 2026-09-19 release) is a
+trained System One model: a frozen Qwen3-8B, last-token pooled through vLLM, with a 20M-parameter projection
+head trained contrastively on about 90M examples. It embeds the state plus instructions and each option
+separately and softmaxes their scaled cosines, so it has no answer letters and no option order. It serves
+`POST /v1/systemone` with TypeSafe's `type` field (its README example nests the type instead; the server
+does not). Run on 2026-09-24 on the same RTX PRO 4000 box with `scripts/evaluate.py --model clm-latest`,
+vLLM 0.30.0, BF16, llav stopped. The setup reproduced CLM's README example within 0.05 on the choice and
+score answers (0.83 against 0.41 on its noul).
+
+| Source                        | llav acc | CLM acc | llav ECE | CLM ECE |
+|-------------------------------|---------:|--------:|---------:|--------:|
+| DBpedia, 14 options           |    98.2% |   22.8% |    0.013 |   0.305 |
+| BoolQ, noul                   |    92.5% |   79.5% |    0.038 |   0.064 |
+| SemIf evidence interpretation |    95.8% |   81.2% |    0.052 |   0.053 |
+| SemIf rule application        |    89.6% |   25.0% |    0.076 |   0.707 |
+| SemIf candidate selection     |    95.8% |   50.0% |    0.065 |   0.276 |
+| AG News, 4 options            |    80.5% |   41.0% |    0.113 |   0.223 |
+| Banking77 card intents        |    75.0% |   18.8% |    0.124 |   0.411 |
+| Yelp stars, score             |    59.0% |   30.5% |    0.204 |   0.365 |
+| All                           |    82.9% |   39.7% |    0.069 |   0.261 |
+
+llav's column is after the letter fix, uncalibrated.
+
+- CLM is order-invariant by construction and measured so: 0 flips in 8,072 rotations. It is also wrong on
+  most of these tasks, and confidently: its answers above 0.9 were right 62% of the time. Stability does not
+  make an answer right, which matches what SemIf found for its per-option reranker.
+- Spot checks rule out a broken setup for the classification failures: "Lionel Messi scored twice as
+  Barcelona won the league" came out Business over Sports, "Wenamu River is a river in South America" came
+  out WrittenWork. CLM's published results are on agent action choice (computer use, games, tool calls,
+  verifying agent runs), which this set does not cover; it may be strong there and weak on topic, intent
+  and evidence questions (inference).
+- Speed is where CLM wins: 1,176 questions in 61 s against llav's 107 s, with an 8B encoder, because the
+  state is one embedding and options are cached vectors. The shift run's 8,072 rotations took 2 s, all
+  cache hits.
+- For llav: no reason to adopt per-option embedding scoring, and the order-sensitivity numbers above are
+  worth their cost in context: a readout that compares the options in one prompt answered these tasks far
+  better than one that scores them apart. Agent action choice is untested for llav and would need its own
+  labelled source before comparing there.
+
 ## Open questions
 
 - Accuracy of llav's own wording against labelled data: measured on public samples and `authored144` (see
   "Labelled evaluation"); not yet against `shape777`-scale data or callers' own workloads.
 - Whether a BF16 GGUF closes the remaining probability differences, which would attribute them to Q8_0
   quantization: untested.
-- A native program on libllama (`llama_memory_seq_cp` or `llama_state_seq_*` plus batched `llama_decode`)
-  might match torch's batched shared mode. Untested; the Arch `llama-cpp` package ships `llama.h`.
-- Accuracy of the alternative models in `scripts/fetch-model.sh` on the `shape777` workload or other labelled
-  data: unmeasured.
+- The native helper batches questions on libllama as torch's shared mode does; a direct throughput
+  comparison with SemIf's torch runner on the same GPU has not been run.
+- Accuracy of the alternative models in `scripts/fetch-model.sh` on labelled data: unmeasured.
+  `scripts/evaluate.py score` against each would answer it.
+- Why reading llama.cpp's logits buffer costs about ten times more than reading an ordinary array
+  (see "The normalizer's cost in the native helper"): not investigated.
+- Agent action choice (tool calls, commands, UI actions), where CLM reports its results: no labelled source
+  in `scripts/evaluate.py`, so llav is unmeasured there.
+- Names that collide with answer letters only inside the state ("Candidate A" with keys `first`, `second`):
+  `_align_letters` does not cover them, and no labelled set tests them.
 - Why Gemma models are 4 to 7 times slower under llav (sliding-window attention with slot restore is the
   suspect): not investigated.
 - Throughput beyond the three machines measured here: the scaling table is an extrapolation; replace its

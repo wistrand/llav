@@ -13,8 +13,9 @@
 
 ## Overview
 
-llav is a thin HTTP layer in front of `llama-server`. All model work happens in llama-server; llav
-validates requests, builds prompts, drives llama-server's HTTP API, and shapes answers. Global rules are in
+llav is a thin HTTP layer in front of `llama-server`. All model work happens in llama-server, or in the
+optional `llav-readout` helper (`--native-readout`); llav validates requests, builds prompts, drives
+llama-server's HTTP API, and shapes answers. Global rules are in
 [CLAUDE.md](../CLAUDE.md#invariants).
 
 **Key files**: `src/llav/engine.py` (`Engine.evaluate`, `Engine._evaluate_on`, `Engine.encode`,
@@ -46,7 +47,7 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
 | `NativeReadout` | `native.py`      | Optional helper process: one batched pass for all questions               |
 | `Calibration`   | `calibration.py` | Optional per-type temperature from `--calibration`; checks the model      |
 | `parse_request` | `questions.py`   | Validate the body into `(state, model, [Question])`                       |
-| `Question`      | `questions.py`   | Frozen per-question data: option ids, what the model reads, score legend  |
+| `Question`      | `questions.py`   | Frozen per-question data: option ids, what the model reads, caller order  |
 | `build_answer`  | `questions.py`   | Turn probabilities into a `noul` / `choice` / `score` answer              |
 | `messages`      | `prompt.py`      | System instruction plus JSON payload `{evidence, criterion, options}`     |
 | `LlamaClient`   | `engine.py`      | JSON over HTTP to llama-server; any failure becomes `EngineError`         |
@@ -58,11 +59,18 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
 
 1. `Handler.do_POST` checks path, auth, `Transfer-Encoding` and `Content-Length` before reading the body.
 2. The body is parsed with `parse_constant` rejecting `NaN`/`Infinity`, then `parse_request` validates it.
+   `parse_question` folds a noul's criteria into its criterion (`_fold_noul`) and moves single-letter choice
+   keys to their own letter (`_align_letters`), keeping the caller's order in `Question.declared`.
 3. The model name is checked against the served id and its aliases.
 4. `Engine.evaluate` encodes every question and, for more than one question, the state prefix. All of
    this happens before a slot is taken, so tokenization does not hold capacity.
 5. A slot is taken from `Engine.free` (or `Overloaded` after `queue_timeout`).
-6. `_evaluate_on` scores each question and returns probabilities, `usage` and timing metadata.
+6. `_evaluate_on` scores each question and returns probabilities, `usage` and metadata. With the native
+   helper and a shared prefix, `_evaluate_native` sends every question in one batch and gets raw label
+   logits plus each question's log-sum-exp over the vocabulary; on any `NativeError` the engine drops the
+   helper and continues through llama-server. Candidate mass is the declared labels' share of the vocabulary:
+   the sum of their vocabulary-normalized `n_probs` on the llama-server path, `exp(logit - normalizer)` on the
+   helper path.
 7. With `--calibration`, each question's probabilities are divided by its type's temperature in log space
    (`Calibration.apply`); the answer letter never changes. Candidate mass stays raw.
 8. `build_answer` shapes each answer; timing goes into `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`,
@@ -70,8 +78,6 @@ validates requests, builds prompts, drives llama-server's HTTP API, and shapes a
    `X-Llav-Calibration`.
 
 ## Shared-state flow
-
-Used when a request has more than one question and every question's tokens start with the state prefix.
 
 Used when every question's tokens start with the state prefix: any multi-question request, and a
 single-question one whose prefix is at least `STATE_CACHE_MIN_TOKENS` while the state cache is on.
@@ -125,6 +131,11 @@ answer the readiness probe while the new llama-server fails to bind, and llav wo
 
 With `--llama-url`, llav reads the slot count and per-slot context from `/props` and uses `--slot-dir` for
 slot files; that server must already run with the flags `LlamaProcess` would pass.
+
+`--calibration` is loaded before anything starts, and a malformed file or one for another prompt version is
+a usage error. With `--gguf`, the file's model hash is checked against the model file before llama-server
+starts, so a mismatch exits in seconds; with `--llama-url` only the file name from `/props` can be compared,
+and llav warns that the contents are unverified.
 
 ## Error mapping
 
