@@ -174,8 +174,13 @@ class Engine:
         template that stops before the answer can begin, or a model that wants to start a sentence.
         """
         probe = Question("probe", "noul", "Is the sky blue?", ("true", "false"), ("Yes", "No"))
+        try:
+            ids = self.encode("The sky is blue.", probe)
+        except ContextTooLong as error:
+            raise EngineError(f"The per-slot context ({self.slot_ctx} tokens) cannot hold even a one-line "
+                              f"question; raise --ctx. {error}") from error
         response = self.client.post("/completion", {
-            "prompt": self.encode("The sky is blue.", probe), "n_predict": 1, "temperature": -1,
+            "prompt": ids, "n_predict": 1, "temperature": -1,
             "n_probs": self.n_probs, "cache_prompt": False, "id_slot": 0,
         })
         entries = (response.get("completion_probabilities") or [{}])[0].get("top_logprobs") or []
@@ -394,8 +399,8 @@ class Engine:
         native = self._evaluate_native(prefix, encoded, counts) if shared else None
         if native is not None:
             results, masses, computed = native
-            # The helper keeps the last state resident, so a repeat evaluates only the questions.
-            cached = computed < len(prefix)
+            # The helper keeps the last state resident, so a repeat evaluates only the questions' own tokens.
+            cached = computed <= sum(len(ids) - len(prefix) for ids in encoded)
             usage = {"input_tokens": computed, "output_tokens": 0}
             meta = {"shared_state_tokens": len(prefix), "seconds": time.perf_counter() - started,
                     "state_cache": "hit" if cached else "miss", "candidate_mass": masses}

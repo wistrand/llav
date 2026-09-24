@@ -819,6 +819,18 @@ into 35% right below and 86% right above (78 and 1,098 questions). Run that way 
 `prefix_reuse: trim`, answered 19/19 easy and 17/17 hard, and took 1.87 s for a first request of 10
 questions and 0.63 s for a repeat. `muse-glimmer-30b` is pinned in `scripts/fetch-model.sh`.
 
+The native helper is a different case. It never rolls a sequence back: it decodes the state once, copies it
+to one sequence per question and extends each copy, which needs only the last window. Measured on Gemma 3 1B
+(sliding-window, Q8_0) on the box the same day, llav with the helper, 10 questions on a 636-token state:
+
+| Helper context           | GPU memory, llav total | Largest probability difference vs llama-server | Repeat request |
+|--------------------------|-----------------------:|-----------------------------------------------:|---------------:|
+| `swa_full = true`        |              6,856 MiB |                                         0.0001 |        0.057 s |
+| default (no full window) |              4,222 MiB |                                         0.0001 |        0.054 s |
+
+The helper runs with the default; a full window costs memory in proportion to its (sequences + 1) x context
+positions and bought nothing.
+
 `--swa-full` is now in the flags `LlamaProcess` passes. On Qwen3.5-4B, which has no sliding-window layers, it
 changed nothing, measured the same day with `benchmark.py timing` and `accuracy` before and after:
 
@@ -842,7 +854,9 @@ repeat request stayed at 124 ms.
 - Accuracy of the alternative models in `scripts/fetch-model.sh` on labelled data: measured for Muse Glimmer
   30B only. `scripts/evaluate.py score` against each of the others would answer it.
 - Muse Glimmer 30B through the native helper: untested. The helper holds a second copy of the weights, so it
-  needs about 35 GB of GPU memory; the 24 GB box cannot hold both.
+  needs about 35 GB of GPU memory; the 24 GB box cannot hold both. The helper runs without a full
+  sliding-window cache, which Gemma 3 1B showed is enough (see "Muse Glimmer 30B, a test"); that it holds
+  for Muse is an inference.
 - Why reading llama.cpp's logits buffer costs about ten times more than reading an ordinary array
   (see "The normalizer's cost in the native helper"): not investigated.
 - Agent action choice (tool calls, commands, UI actions), where CLM reports its results: no labelled source

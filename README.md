@@ -55,7 +55,9 @@ their respective owners. llav reproduces the public request/response shape, not 
    | Any, from source | llama.cpp's [build guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) |
 
    A GPU backend (CUDA, Vulkan, Metal, ROCm or SYCL) is much faster; CPU-only works. If `llama-server` is
-   not on `PATH`, point llav at it with `--llama-server PATH`.
+   not on `PATH`, point llav at it with `--llama-server PATH`. llav is tested with llama.cpp build 10809
+   and later. It starts llama-server with `--swa-full`, so a build too old for that flag fails at startup,
+   and the error shows llama-server's own message.
 
 2. Download the model (4.6 GB, SHA-256 checked):
 

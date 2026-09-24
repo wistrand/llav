@@ -81,11 +81,22 @@ class LlamaProcess:
             self.stop()
             raise
 
+    def _log_tail(self, lines: int = 5) -> str:
+        """The end of llama-server's log. The log lives in llav's scratch directory, which is removed on exit,
+        so an error that only named the file would point at nothing."""
+        try:
+            self.log.flush()
+            text = self.log_path.read_text(errors="replace")
+        except OSError:
+            return ""
+        kept = [line.strip() for line in text.splitlines() if line.strip()][-lines:]
+        return (":\n  " + "\n  ".join(kept)) if kept else ""
+
     def _wait_ready(self, load_timeout: float) -> None:
         deadline = time.monotonic() + load_timeout
         while True:
             if self.process.poll() is not None:
-                raise RuntimeError(f"llama-server exited with code {self.process.returncode}; see {self.log_path}")
+                raise RuntimeError(f"llama-server exited with code {self.process.returncode}{self._log_tail()}")
             try:
                 with urllib.request.urlopen(self.url + "/health", timeout=5) as response:
                     if json.load(response).get("status") == "ok":
@@ -93,7 +104,7 @@ class LlamaProcess:
             except (urllib.error.URLError, ConnectionError, TimeoutError, json.JSONDecodeError):
                 pass
             if time.monotonic() > deadline:
-                raise RuntimeError(f"llama-server not ready after {load_timeout}s; see {self.log_path}")
+                raise RuntimeError(f"llama-server not ready after {load_timeout}s{self._log_tail()}")
             time.sleep(0.5)
 
     def alive(self) -> bool:

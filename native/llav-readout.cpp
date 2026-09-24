@@ -186,8 +186,9 @@ int main(int argc, char ** argv) {
     ctx_params.n_seq_max = static_cast<uint32_t>(args.seq) + 1;  // sequence 0 holds the prefix
     ctx_params.n_threads = args.threads;
     ctx_params.n_threads_batch = args.threads;
-    // As llama-server's --swa-full: a sliding-window model keeps the whole prefix, so suffixes can extend it.
-    ctx_params.swa_full = true;
+    // No swa_full, unlike llama-server's --swa-full: the helper only extends a resident prefix forward, which
+    // needs just the last window, and a full cache over (seq + 1) * ctx positions cost 2.6 GB more on Gemma 3
+    // 1B for identical answers (agent_docs/research.md).
     llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (ctx == nullptr) {
         fprintf(stderr, "llav-readout: cannot create a context\n");

@@ -52,11 +52,14 @@
   can shift slightly from one day to the next. Nothing is cached across requests, so the date change does
   not break prefix reuse. The template also switches thinking off only through `enable_thinking`; check the
   rendered prompt ends in an empty `<think>` block after any template change.
+- **llama-server's log is deleted with llav's scratch directory.** A startup failure therefore quotes the log's
+  last lines (`LlamaProcess._log_tail`) rather than naming the file; keep that for any new startup error.
 - **Sliding-window models need `--swa-full` for prefix reuse.** Without it llama-server re-reads the
   whole state for every question even after a slot restore, and the startup probe picks the slot-file
   path: 19.7 s against 0.62 s for a repeat request of 10 questions on Muse Glimmer 30B. `LlamaProcess`
   passes it; an external llama-server (`--llama-url`) must be started with it. Models without sliding
-  windows ignore it. See [research.md](research.md#muse-glimmer-30b-a-test).
+  windows ignore it. The native helper deliberately does not set `swa_full`: it only extends a prefix, and a
+  full window over its many sequences costs gigabytes. See [research.md](research.md#muse-glimmer-30b-a-test).
 - **Some chat templates stop before the answer can start.** Muse Glimmer's template ends at
   `<|start|>assistant`, and the model must write a recipient header (` to=user<|message|>`) first; without
   it no label is in the top `n_probs`. `templates.detect` recognises the template and supplies the header;

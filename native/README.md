@@ -49,8 +49,9 @@ one pass (default 16); a request with more goes to llama-server. `GET /v1/models
   The pass is split across the helper's `--threads`, 4 since llav does not pass the flag. Computed serially
   it cost 19 ms per question on the RTX PRO 4000 box, more than the batched decode (see
   [agent_docs/research.md](../agent_docs/research.md)).
-- The helper's context keeps the full sliding-window cache, as llama-server's `--swa-full` does, so a
-  sliding-window model can extend a resident prefix.
+- The helper does not keep a full sliding-window cache, unlike llama-server with `--swa-full`. It never rolls
+  back, only extends a resident prefix forward, which needs just the last window. On Gemma 3 1B a full cache
+  cost 2.6 GB more for identical answers (see [agent_docs/research.md](../agent_docs/research.md)).
 - The helper keeps only the most recent state resident, so `X-Llav-State-Cache` reports a hit when a request
   repeats the state its predecessor used. llav's slot-file cache serves the llama-server path.
 - Requests are serialized through the one helper process. With `--slots` above 1, llama-server can answer

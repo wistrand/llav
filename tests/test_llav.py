@@ -375,7 +375,11 @@ class EngineTest(unittest.TestCase):
     def test_context_limit(self):
         _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}}))
         with self.assertRaises(ContextTooLong):
-            self.engine(FakeClient(), slot_ctx=50).evaluate("s", questions)
+            self.engine(FakeClient(), slot_ctx=2_000).evaluate("s" * 5_000, questions)
+
+    def test_a_context_too_small_for_any_question_fails_at_startup(self):
+        with self.assertRaisesRegex(EngineError, "raise --ctx"):
+            self.engine(FakeClient(), slot_ctx=50)
 
     def test_caller_text_cannot_inject_control_tokens(self):
         engine = self.engine(FakeClient())
@@ -550,6 +554,18 @@ class NativeReadoutTest(unittest.TestCase):
         script.chmod(0o755)
         with self.assertRaises(NativeError):
             NativeReadout(str(script), Path("model.gguf"), [10, 20], 4096)
+
+    def test_helper_reports_a_resident_state_as_a_cache_hit(self):
+        # The stub evaluates only the question tokens, as the helper does when the state is resident. Questions
+        # longer than the state used to be reported as a miss.
+        engine = Engine(FakeClient(), 1, 100_000, Path(tempfile.mkdtemp()), queue_timeout=1, native=self.helper())
+        long = "which team should handle this ticket, given everything it says? " * 3
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": long}, "b": {"type": "noul", "instructions": long + "?"},
+        }))
+        _, usage, meta = engine.evaluate("s", questions)
+        self.assertGreater(usage["input_tokens"], meta["shared_state_tokens"])
+        self.assertEqual(meta["state_cache"], "hit")
 
     def test_engine_reports_candidate_mass_from_the_helper(self):
         readout = self.helper()
@@ -759,6 +775,15 @@ class LlamaProcessTest(unittest.TestCase):
             self.assertEqual(command[command.index("--ctx-checkpoints") + 1], "0")
             self.assertIn("--slot-save-path", command)
             self.assertIn("--swa-full", command)
+
+    def test_a_failed_start_quotes_the_log(self):
+        # The log is deleted with llav's scratch directory, so the error must carry its end.
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "old-llama-server"
+            binary.write_text("#!/bin/sh\necho 'error: invalid argument: --swa-full' >&2\nexit 1\n")
+            binary.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "invalid argument: --swa-full"):
+                LlamaProcess(str(binary), Path("model.gguf"), 1, 1, 8, Path(directory), Path(directory) / "log", [])
 
     def test_busy_port_is_refused_before_starting(self):
         with socket.socket() as busy, tempfile.TemporaryDirectory() as directory:
