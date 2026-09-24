@@ -40,7 +40,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `scripts/fetch-model.sh`   | Downloads a pinned GGUF (Qwen3.5-4B default) and checks SHA-256        |
 | `scripts/remote-gpu.sh`    | Starts llav on a rented CUDA box over SSH; NATIVE=1, TS_AUTHKEY=...    |
 | `agent_docs/`              | Deep dives, linked below                                               |
-| `docs/`                    | README screenshots; retake them when the web UI changes                |
+| `docs/`                    | GitHub Pages site (`index.html`) and README screenshots                |
 
 ## Commands
 
@@ -117,6 +117,9 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - Map new failure modes to the existing statuses in `server.py`: 422 for caller mistakes, 529 for
   capacity, 500 for backend faults.
 - The README's Options block is hand-written. When flags change in `cli.py`, update it in the same change.
+- `docs/index.html` is the project's GitHub Pages site and repeats the README's quick start, options and
+  headline results. When those change, update it in the same change; retake the screenshots in `docs/` when
+  the web UI changes.
 - The API is described once, in `openapi.py`. When routes, question types, limits or statuses change, update
   it and run `PYTHONPATH=src python3 scripts/write-openapi.py`; a test fails while `openapi.json` is stale.
 

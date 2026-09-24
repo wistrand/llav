@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llav · decisions from logprobs</title>
+<meta name="description" content="llav asks a local language model yes/no, multiple-choice and rating questions about text and returns probabilities instead of generated text. An HTTP server with the shape of TypeSafe's System One API, running on llama.cpp.">
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1f23; --muted: #626a75; --line: #e1e3e6;
+  --accent: #2b62c9; --accent-soft: #e6eefb; --code-bg: #f0f1f3; --good: #1b7f4b; --bad: #b3372c;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121418; --panel: #1a1d22; --text: #e4e6e9; --muted: #9aa2ad; --line: #2c3037;
+    --accent: #79a6f2; --accent-soft: #1f2d45; --code-bg: #20242a; --good: #4cc584; --bad: #f08b80;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 4rem; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 var(--sans); }
+a { color: var(--accent); }
+code, pre { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow-x: auto; line-height: 1.45; }
+pre code { background: none; padding: 0; }
+nav {
+  position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+nav .inner { max-width: 60rem; margin: 0 auto; padding: 0.6rem 1rem; display: flex; gap: 1.1rem; align-items: center;
+  overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+nav .inner::-webkit-scrollbar { display: none; }
+nav .brand { font-weight: 700; color: var(--text); text-decoration: none; margin-right: 0.4rem; }
+nav a { text-decoration: none; font-size: 0.93rem; }
+main { max-width: 60rem; margin: 0 auto; padding: 0 1rem 4rem; }
+header.hero { padding: 3rem 0 1rem; }
+header.hero h1 { font-size: 2.4rem; margin: 0 0 0.3rem; letter-spacing: -0.02em; }
+header.hero p.lead { font-size: 1.2rem; color: var(--muted); margin: 0 0 1.5rem; max-width: 42rem; }
+.example { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.2rem;
+  font-family: var(--mono); font-size: 0.9rem; display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; }
+.example .k { color: var(--muted); }
+.buttons { display: flex; gap: 0.7rem; flex-wrap: wrap; margin: 1.5rem 0 0; }
+.button { display: inline-block; padding: 0.55rem 1rem; border-radius: 8px; text-decoration: none; font-weight: 600;
+  border: 1px solid var(--line); background: var(--panel); }
+.button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+section { padding-top: 2.2rem; }
+h2 { font-size: 1.6rem; margin: 0 0 0.8rem; letter-spacing: -0.01em; }
+h3 { font-size: 1.1rem; margin: 1.6rem 0 0.5rem; }
+p { margin: 0 0 1rem; }
+.muted { color: var(--muted); }
+.note { font-size: 0.9rem; color: var(--muted); }
+.flow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: stretch; margin: 1rem 0 1.4rem; }
+.flow .step { flex: 1 1 9rem; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 0.7rem 0.8rem; font-size: 0.92rem; }
+.flow .step b { display: block; margin-bottom: 0.2rem; }
+.flow .step span { color: var(--muted); font-size: 0.86rem; }
+.flow .arrow { align-self: center; color: var(--muted); font-size: 1.2rem; }
+@media (max-width: 40rem) { .flow .arrow { display: none; } .flow .step { flex-basis: 100%; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 0.8rem; margin: 1rem 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; }
+.card b { display: block; margin-bottom: 0.25rem; }
+.card p { margin: 0; color: var(--muted); font-size: 0.93rem; }
+.table-wrap { overflow-x: auto; margin: 0.8rem 0 1rem; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { padding: 0.45rem 0.8rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--muted); background: var(--code-bg); }
+tr:last-child td { border-bottom: none; }
+tr.hl td { background: var(--accent-soft); font-weight: 600; }
+ol.steps { padding-left: 1.3rem; }
+ol.steps > li { margin-bottom: 1.2rem; }
+figure { margin: 1rem 0; }
+figure img { max-width: 100%; border: 1px solid var(--line); border-radius: 10px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+.disclaimer { font-size: 0.9rem; color: var(--muted); border-left: 3px solid var(--line); padding-left: 0.8rem; }
+footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<nav aria-label="Sections">
+  <div class="inner">
+    <a class="brand" href="#top">llav</a>
+    <a href="#how">How it works</a>
+    <a href="#start">Quick start</a>
+    <a href="#api">API</a>
+    <a href="#results">Results</a>
+    <a href="#speed">Speed</a>
+    <a href="#options">Options</a>
+    <a href="https://github.com/wistrand/llav">GitHub</a>
+  </div>
+</nav>
+
+<main id="top">
+
+<header class="hero">
+  <h1>llav</h1>
+  <p class="lead">Ask a local language model yes/no, multiple-choice and rating questions about a piece of text,
+    and get probabilities back instead of generated text.</p>
+  <div class="example" aria-label="Example">
+    <span class="k">text</span><span>"Help! My payouts have been failing for 3 days."</span>
+    <span class="k">question</span><span>Which team should handle this? billing / technical / sales</span>
+    <span class="k">answer</span><span>billing 0.85, technical 0.15, sales 0.00</span>
+  </div>
+  <div class="buttons">
+    <a class="button primary" href="#start">Get started</a>
+    <a class="button" href="https://github.com/wistrand/llav">Source on GitHub</a>
+    <a class="button" href="#results">See the results</a>
+  </div>
+</header>
+
+<section aria-labelledby="what">
+  <h2 id="what">What it is</h2>
+  <p>llav runs an open model through <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> on your own
+    machine. The default is <a href="https://huggingface.co/Qwen/Qwen3.5-4B">Qwen3.5-4B</a>, but it is not the only
+    choice: any GGUF chat model can be tried, llav checks at startup that it answers with option letters, and five
+    alternatives are pinned for download, from Qwen3.5-2B to Meta's Muse Glimmer 30B.</p>
+  <p>Its HTTP API has the same shape as TypeSafe's System One API (<code>POST /v1/systemone</code>), so code
+    written for their Jev model can call llav instead. The question types keep TypeSafe's names:
+    <code>noul</code> (yes/no), <code>choice</code> (pick one option) and <code>score</code> (a level on a scale).</p>
+  <div class="cards">
+    <div class="card"><b>No Python dependencies</b><p>Standard library only. The one runtime requirement is
+      llama.cpp's <code>llama-server</code>.</p></div>
+    <div class="card"><b>Any llama.cpp backend</b><p>Vulkan, CUDA, Metal, SYCL, ROCm or CPU.</p></div>
+    <div class="card"><b>Fast on repeated text</b><p>The text is read once and kept, so a follow-up question costs
+      about 0.2 s instead of 3 s on a laptop.</p></div>
+    <div class="card"><b>Numbers you can check</b><p>A header flags answers the options do not fit, and an
+      evaluation script measures accuracy and calibration on your own labelled data.</p></div>
+  </div>
+  <p class="disclaimer">Independent project; not affiliated with or endorsed by TypeSafe. Jev and TypeSafe are the
+    property of their respective owners. llav reproduces the public request/response shape, not Jev's model.</p>
+</section>
+
+<section aria-labelledby="how">
+  <h2 id="how">How it works</h2>
+  <div class="flow" role="list">
+    <div class="step" role="listitem"><b>Your text and question</b><span>billing / technical / sales</span></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="step" role="listitem"><b>Prompt with lettered options</b><span>A billing · B technical · C sales</span></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="step" role="listitem"><b>Local model</b><span>one forward pass, no text generated</span></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="step" role="listitem"><b>How likely the next token is A, B or C</b><span>read from the model's probabilities</span></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="step" role="listitem"><b>Typed answer</b><span>billing 0.85 · technical 0.15 · sales 0.00</span></div>
+  </div>
+  <p>Each question is one forward pass. llav reads how likely the model is to answer with each option's letter and
+    normalizes that over the options. Nothing is sampled, so there is no output to parse, no reasoning to wait for,
+    and nothing to retry when a model answers in prose.</p>
+  <p>When a request asks several questions about the same text, llav reads the text once and shares it between
+    them, and keeps it for later requests. An optional native helper answers all of a request's questions in one
+    batched pass on a GPU.</p>
+</section>
+
+<section aria-labelledby="start">
+  <h2 id="start">Quick start</h2>
+  <ol class="steps">
+    <li><b>Install llama.cpp</b> so that <code>llama-server</code> is on your <code>PATH</code>:
+      <code>brew install llama.cpp</code> (macOS, Linux), <code>winget install llama.cpp</code> (Windows),
+      <code>pacman -S llama-cpp</code> (Arch), or a
+      <a href="https://github.com/ggml-org/llama.cpp/releases">release build</a> for your GPU. llav is tested with
+      build 10809 and later.</li>
+    <li><b>Get llav and a model</b> (4.6 GB, SHA-256 checked):
+<pre><code>git clone https://github.com/wistrand/llav.git && cd llav
+scripts/fetch-model.sh ~/models</code></pre>
+      Pass <code>qwen3.5-2b</code>, <code>granite-4.0-h-tiny</code>, <code>granite-4.2-3b</code>,
+      <code>smollm3-3b</code> or <code>muse-glimmer-30b</code> as a second argument for an alternative.</li>
+    <li><b>Serve.</b> Nothing needs installing:
+<pre><code>PYTHONPATH=src python3 -m llav --gguf ~/models/Qwen_Qwen3.5-4B-Q8_0.gguf --port 8080 --web-ui</code></pre>
+      <code>--web-ui</code> serves a page at <code>http://localhost:8080/</code> for trying questions in a browser.
+      <figure>
+        <a href="webui.png"><img src="webui-thumb.png" width="480" alt="The llav web UI answering a rating and a choice question about a support ticket"></a>
+        <figcaption>The web UI, answering a rating and a choice question about a support ticket.</figcaption>
+      </figure>
+    </li>
+    <li><b>Ask:</b>
+<pre><code>curl -s localhost:8080/v1/systemone -H 'Content-Type: application/json' -d '{
+  "state": "Help! My payouts have been failing for 3 days.",
+  "model": "llav-latest",
+  "questions": {
+    "is_urgent":   {"type": "noul", "instructions": "Does this convey urgency?"},
+    "department":  {"type": "choice", "instructions": "Which team should handle this?",
+                    "criteria": {"billing": "Payments, invoicing, refunds",
+                                 "technical": "Bugs, outages, integrations",
+                                 "sales": "Pricing, upgrades, new accounts"}},
+    "frustration": {"type": "score", "instructions": "How frustrated is the customer?",
+                    "criteria": ["Calm", "Frustrated", "Very angry"]}
+  }
+}'</code></pre>
+<pre><code>{
+  "model": "llav-qwen_qwen3.5-4b-q8_0",
+  "answers": {
+    "is_urgent": {"type": "noul", "noul": 0.997},
+    "department": {"type": "choice", "choice": "billing",
+                   "probabilities": {"billing": 0.849, "technical": 0.150, "sales": 0.002},
+                   "confidence": 0.605},
+    "frustration": {"type": "score", "score": 0.937,
+                    "legend": {"0": "Calm", "1": "Frustrated", "2": "Very angry"},
+                    "probabilities": {"0": 0.065, "1": 0.933, "2": 0.002},
+                    "confidence": 0.769}
+  },
+  "usage": {"input_tokens": 249, "output_tokens": 0}
+}</code></pre>
+      <p class="note">Abridged: real responses carry full-precision floats.</p></li>
+  </ol>
+</section>
+
+<section aria-labelledby="api">
+  <h2 id="api">API</h2>
+  <p><code>POST /v1/systemone</code> takes <code>{"state", "model", "questions"}</code>. <code>state</code> is the text
+    the questions are about, as a string or a JSON object or array. Each question has a <code>type</code>,
+    <code>instructions</code> and <code>criteria</code>.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Type</th><th style="text-align:left">criteria</th><th style="text-align:left">Answer</th></tr></thead>
+    <tbody>
+      <tr><td><code>noul</code></td><td style="text-align:left">optional <code>{"true": ..., "false": ...}</code></td><td style="text-align:left"><code>noul</code>: probability of yes</td></tr>
+      <tr><td><code>choice</code></td><td style="text-align:left"><code>{option: description or null}</code>, 2 to 26 options</td><td style="text-align:left"><code>choice</code>, <code>probabilities</code>, <code>confidence</code></td></tr>
+      <tr><td><code>score</code></td><td style="text-align:left">ordered array of 2 to 10 levels</td><td style="text-align:left"><code>score</code>, <code>legend</code>, <code>probabilities</code>, <code>confidence</code></td></tr>
+    </tbody>
+  </table></div>
+  <h3>Write the actual question in <code>instructions</code></h3>
+  <p>"Do mitochondria play a role in leaf remodelling?" works better than a generic "Is the answer to the research
+    question yes?" pointing into the text: on medical yes/no questions it raised accuracy from 80.7% to 86.0%.</p>
+  <h3>Headers</h3>
+  <ul>
+    <li><code>X-Llav-Candidate-Mass</code>: per question, how much of the model's probability went to the option
+      letters. Well below 1 means the model wanted to say something else, for example that no option fits.</li>
+    <li><code>X-Llav-Calibration</code>: <code>none</code>, or the id of a temperature file loaded with
+      <code>--calibration</code>.</li>
+    <li><code>X-Llav-Seconds</code>, <code>X-Llav-Shared-State-Tokens</code>, <code>X-Llav-State-Cache</code>:
+      timing and reuse.</li>
+  </ul>
+  <p>The full contract is in <a href="https://github.com/wistrand/llav/blob/main/openapi.json">openapi.json</a>,
+    also served at <code>GET /openapi.json</code>.</p>
+</section>
+
+<section aria-labelledby="results">
+  <h2 id="results">Results</h2>
+  <p>Accuracy on 1,176 labelled questions: samples of public datasets (DBpedia, BoolQ, AG News, Banking77 card
+    intents, Yelp stars) plus SemIf's 144 authored decisions on evidence, rules and candidates. Every system got the
+    same questions. ECE is the calibration error of the top answer's probability; lower is better.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>System</th><th>Accuracy</th><th>ECE</th><th>Right when above 0.9</th><th>Changes with option order</th></tr></thead>
+    <tbody>
+      <tr><td>Jev (TypeSafe, hosted)</td><td>89.0%</td><td>0.040</td><td>96.3%</td><td>6%</td></tr>
+      <tr class="hl"><td>llav, Qwen3.5-4B</td><td>82.9%</td><td>0.069</td><td>93.2%</td><td>19%</td></tr>
+      <tr><td>llav, Muse Glimmer 30B</td><td>82.9%</td><td>0.037</td><td>97.3%</td><td>not run</td></tr>
+      <tr><td>von 1.2 (trained encoder)</td><td>76.4%</td><td>0.115</td><td>89.3%</td><td>0%</td></tr>
+      <tr><td>Laya typed-decisions (trained encoder)</td><td>74.8%</td><td>0.042</td><td>96.0%</td><td>30%</td></tr>
+      <tr><td>CLM (Qwen3-8B with a trained head)</td><td>39.7%</td><td>0.261</td><td>62.2%</td><td>0%</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>Jev leads by 6 points, most of it on confusable options (13.5 points on the Banking77 card intents and on
+      Yelp star ratings); on clear questions the gap is 0 to 1 point.</li>
+    <li>llav's probabilities are overconfident at the top. One temperature fitted on your own labelled data
+      (<code>scripts/evaluate.py fit</code>, loaded with <code>--calibration</code>) cut ECE from 0.069 to 0.023 on
+      held-out questions.</li>
+    <li>The small trained encoders are about three times faster but cannot read a claim against evidence: they
+      fall 21 to 65 points behind on SemIf's evidence, rule and candidate questions.</li>
+  </ul>
+  <h3>On Jevals' published tasks</h3>
+  <p><a href="https://jevals.com/">Jevals</a> scores Jev and six LLMs on fixed items against human labels.
+    llav rebuilds two of its tasks item for item and computes the same Decision Score: 0 is guessing by the label
+    frequencies, 100 is always right with full confidence. Rerunning Jev through OpenRouter reproduced its published
+    numbers, so the rows compare fairly.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>System</th><th>PubMedQA score</th><th>PubMedQA accuracy</th><th>HelpSteer2 score</th><th>HelpSteer2 accuracy</th></tr></thead>
+    <tbody>
+      <tr><td>Gemini 3.8 Flash</td><td>73.0</td><td>92.5%</td><td>4.6</td><td>42.4%</td></tr>
+      <tr><td>Jev</td><td>69.0</td><td>91.3%</td><td>9.2</td><td>41.3%</td></tr>
+      <tr><td>DeepSeek V4.1 Flash</td><td>47.5</td><td>83.7%</td><td>-19.0</td><td>34.7%</td></tr>
+      <tr class="hl"><td>llav, Qwen3.5-4B</td><td>46.5</td><td>80.7%</td><td>-11.1</td><td>39.0%</td></tr>
+      <tr><td>von 1.2</td><td>7.7</td><td>68.3%</td><td>-17.0</td><td>37.3%</td></tr>
+      <tr><td>Label frequencies, reads nothing</td><td>0</td><td>62.0%</td><td>0</td><td>41.7%</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Abridged; all rows, the method and the caveats are in
+    <a href="https://github.com/wistrand/llav/blob/main/agent_docs/comparisons.md">comparisons.md</a>. On
+    HelpSteer2 no model clearly beats guessing.</p>
+</section>
+
+<section aria-labelledby="speed">
+  <h2 id="speed">Speed</h2>
+  <p>Qwen3.5-4B, a 1,800-token text, 10 yes/no questions. "Repeat" is the same text arriving in a later request.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Machine</th><th>First request</th><th>Repeat</th><th>With the native helper</th></tr></thead>
+    <tbody>
+      <tr><td>Laptop, Intel Arc B390, Vulkan</td><td>4.70 s</td><td>1.73 s</td><td>3.86 s / 1.22 s</td></tr>
+      <tr><td>RTX 3090, CUDA</td><td>1.16 s</td><td>0.65 s</td><td>0.75 s / 0.21 s</td></tr>
+    </tbody>
+  </table></div>
+  <p>For comparison, Jev through OpenRouter answered one to ten questions in 0.3 to 0.4 s per request from a
+    laptop, about 140 ms of it network. A local llav on a GPU was faster; on a laptop's integrated GPU it was
+    slower.</p>
+</section>
+
+<section aria-labelledby="options">
+  <h2 id="options">Options</h2>
+<pre><code>llav --gguf FILE [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
+     [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
+     [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
+     [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
+
+llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own llama-server</code></pre>
+  <p>When attaching to your own llama-server, start it with
+    <code>--ctx-checkpoints 0 --slot-save-path DIR --swa-full --jinja</code>.
+    <code>python3 -m llav --help</code> describes every flag.</p>
+  <h3>Further reading</h3>
+  <ul>
+    <li><a href="https://github.com/wistrand/llav#readme">README</a>: the full guide.</li>
+    <li><a href="https://github.com/wistrand/llav/blob/main/agent_docs/research.md">research.md</a>: accuracy,
+      calibration and the approaches tried and rejected.</li>
+    <li><a href="https://github.com/wistrand/llav/blob/main/agent_docs/performance.md">performance.md</a>: where a
+      request's time goes, per machine.</li>
+    <li><a href="https://github.com/wistrand/llav/blob/main/agent_docs/comparisons.md">comparisons.md</a>: other
+      models and System One systems on the same questions.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  llav · MIT licence · <a href="https://github.com/wistrand/llav">github.com/wistrand/llav</a><br>
+  The decision prompt and readout follow <a href="https://github.com/TheoLeeCJ/SemIf">SemIf</a>'s
+  <code>direct-options-v1</code>.
+</footer>
+
+</body>
+</html>

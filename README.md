@@ -42,6 +42,8 @@ The HTTP API has the same shape as TypeSafe's System One API (`POST /v1/systemon
 Jev model can call llav instead. The question types keep TypeSafe's names: `noul` (yes/no), `choice` (pick
 one option) and `score` (a level on a scale).
 
+Website: [wistrand.github.io/llav](https://wistrand.github.io/llav/).
+
 *Independent project; not affiliated with or endorsed by TypeSafe. Jev and TypeSafe are the property of
 their respective owners. llav reproduces the public request/response shape, not Jev's model.*
 
