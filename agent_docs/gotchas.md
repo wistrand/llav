@@ -52,6 +52,20 @@
   can shift slightly from one day to the next. Nothing is cached across requests, so the date change does
   not break prefix reuse. The template also switches thinking off only through `enable_thinking`; check the
   rendered prompt ends in an empty `<think>` block after any template change.
+- **Sliding-window models need `--swa-full` for prefix reuse.** Without it llama-server re-reads the
+  whole state for every question even after a slot restore, and the startup probe picks the slot-file
+  path: 19.7 s against 0.62 s for a repeat request of 10 questions on Muse Glimmer 30B. `LlamaProcess`
+  passes it; an external llama-server (`--llama-url`) must be started with it. Models without sliding
+  windows ignore it. See [research.md](research.md#muse-glimmer-30b-a-test).
+- **Some chat templates stop before the answer can start.** Muse Glimmer's template ends at
+  `<|start|>assistant`, and the model must write a recipient header (` to=user<|message|>`) first; without
+  it no label is in the top `n_probs`. `templates.detect` recognises the template and supplies the header;
+  a new template of this kind needs an entry in `_KNOWN` there, or `--assistant-prefix`. `_probe_labels`
+  makes an unknown one fail at startup with a hint instead of on every request.
+- **The low candidate-mass cue is per template profile.** 0.9 suits Qwen3.5-4B (0.999 when answering, 0.57
+  when no option fits); Muse Glimmer answers correctly at a median of 0.62, so its profile uses 0.35. The web
+  UI and `scripts/evaluate.py` read it from `backend.low_candidate_mass`. Muse's no-fit signal is weaker
+  (0.47 against 0.71 on one ticket), so the cue misses cases that Qwen's catches.
 - **More than 26 choice options needs a different readout.** Two-letter labels are not single tokens in
   Qwen's vocabulary; raising `MAX_OPTIONS` alone breaks the boundary check.
 - **The `--chat-template-kwargs` flag logs a deprecation warning** in current llama.cpp, which suggests

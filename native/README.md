@@ -38,7 +38,8 @@ On a rented GPU box, `NATIVE=1 scripts/remote-gpu.sh HOST PORT` builds the helpe
 with it.
 
 The helper loads the model itself, so it needs `--gguf`, not `--llama-url`, and it holds a second copy of
-the weights in memory alongside llama-server's. `--native-questions N` sets how many questions it takes in
+the weights in memory alongside llama-server's. For Qwen3.5-4B that is about 5 GB more; Muse Glimmer 30B
+(16.8 GB) with the helper does not fit a 24 GB GPU. `--native-questions N` sets how many questions it takes in
 one pass (default 16); a request with more goes to llama-server. `GET /v1/models` reports
 `backend.prefix_reuse: native` while it is in use.
 
@@ -48,6 +49,8 @@ one pass (default 16); a request with more goes to llama-server. `GET /v1/models
   The pass is split across the helper's `--threads`, 4 since llav does not pass the flag. Computed serially
   it cost 19 ms per question on the RTX PRO 4000 box, more than the batched decode (see
   [agent_docs/research.md](../agent_docs/research.md)).
+- The helper's context keeps the full sliding-window cache, as llama-server's `--swa-full` does, so a
+  sliding-window model can extend a resident prefix.
 - The helper keeps only the most recent state resident, so `X-Llav-State-Cache` reports a hit when a request
   repeats the state its predecessor used. llav's slot-file cache serves the llama-server path.
 - Requests are serialized through the one helper process. With `--slots` above 1, llama-server can answer

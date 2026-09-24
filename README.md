@@ -63,10 +63,11 @@ their respective owners. llav reproduces the public request/response shape, not 
    scripts/fetch-model.sh ~/models
    ```
 
-   Four alternatives are pinned too, all Apache 2.0: `qwen3.5-2b` (2.1 GB, the fastest),
-   `granite-4.0-h-tiny` (7.4 GB), `granite-4.2-3b` (3.9 GB) and `smollm3-3b` (3.3 GB). Pass one as a second
-   argument. Only the default is validated; [agent_docs/research.md](agent_docs/research.md) compares them
-   and lists the models that failed.
+   Five alternatives are pinned too, all Apache 2.0: `qwen3.5-2b` (2.1 GB, the fastest),
+   `granite-4.0-h-tiny` (7.4 GB), `granite-4.2-3b` (3.9 GB), `smollm3-3b` (3.3 GB) and `muse-glimmer-30b`
+   (16.8 GB, as accurate as the default on the labelled set and better calibrated, but needs about 18 GB of
+   GPU memory). Pass one as a second argument. Only the default is validated;
+   [agent_docs/research.md](agent_docs/research.md) compares them and lists the models that failed.
 
 3. Serve from the checkout. Nothing needs installing:
 
@@ -172,6 +173,8 @@ Every question becomes one prompt: a fixed system instruction, then a JSON paylo
 llav renders it with the model's own chat template, thinking disabled, and reads the next-token
 log-probabilities of `A`, `B`, … softmaxed over the declared options. Nothing is sampled, so there is no
 text to parse, no reasoning tokens to wait through, and nothing to retry when a model answers in prose.
+Where a template makes the model write a header before its answer (Muse Glimmer), llav adds the header to
+the prompt, and at startup it checks that an answer letter is among the likely next tokens.
 
 The readout is [SemIf](https://github.com/TheoLeeCJ/SemIf)'s `direct-options-v1`. Checked against SemIf's
 published PyTorch predictions on its 777 owned decisions: all 777 prompts identical, 768 answers agreed, and
@@ -207,8 +210,10 @@ measured with `scripts/evaluate.py`. ECE is the expected calibration error of th
 - **Option order matters on hard choices.** Asked with every rotation of its options, 19% of choice and
   score answers changed under some order, about a third on confusable options (Banking77, Yelp) and 4% on
   clear ones (DBpedia).
-- The per-source numbers, the order analysis, calibration and a comparison with CLM, a trained System One
-  model, are in [agent_docs/research.md](agent_docs/research.md).
+- The pinned `muse-glimmer-30b` scored the same 82.9% overall with better calibration (ECE 0.037 against
+  0.069), using about three times the GPU memory (16 GB against 5 GB).
+- The per-source numbers, the order analysis, calibration and comparisons with Muse Glimmer 30B and with
+  CLM, a trained System One model, are in [agent_docs/research.md](agent_docs/research.md).
 
 ## Performance
 
@@ -246,14 +251,20 @@ estimates for other hardware and what a text-generating baseline would cost are 
 ```
 llav --gguf FILE [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
      [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
-     [--native-readout BIN] [--native-questions 16] [--calibration FILE]
+     [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
 
 llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own llama-server
 ```
 
 Pass llama.cpp flags through with `--llama-arg`, for example `--llama-arg=-dev --llama-arg=Vulkan0`. When
-attaching to your own server, start it with `--ctx-checkpoints 0 --slot-save-path DIR --jinja`.
+attaching to your own server, start it with `--ctx-checkpoints 0 --slot-save-path DIR --swa-full --jinja`.
+
+llav checks at startup that the model answers with an option letter, and exits with a hint if it does not.
+Some chat templates end before the answer can start: Muse Glimmer's model must first write a recipient
+header. llav recognises such templates and adds the header itself (`GET /v1/models` shows it as
+`backend.assistant_prefix`); `--assistant-prefix TEXT` sets it for a template it does not know, and
+`--assistant-prefix ''` turns it off.
 
 ## License
 

@@ -258,7 +258,10 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
                                 "backend": {
                                     "type": "object",
                                     "description": "llav-specific: runtime, model file, slots, per-slot "
-                                                   "context and the prefix-reuse path the startup probe chose.",
+                                                   "context, the prefix-reuse path the startup probe chose, the "
+                                                   "calibration id, the chat template profile with its assistant "
+                                                   "prefix, and the candidate mass below which an answer is "
+                                                   "flagged (low_candidate_mass).",
                                     "additionalProperties": True,
                                 },
                             },

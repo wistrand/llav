@@ -56,6 +56,12 @@ letter keys keep the request order exactly. `messages()` is unchanged, so this n
 bump; like the noul fold, it changes the prompt such questions produce. `probabilities` in the answer keeps
 the caller's key order. Measurements in [research.md](research.md).
 
+Why some templates get an assistant prefix (`templates.py`): the prompt must end where the answer letter can
+be the next token. Muse Glimmer's template ends at `<|start|>assistant`, and its model first writes a
+recipient header, so llav appends ` to=user<|message|>` as template text. The profile is chosen from the
+rendered template, never from a model name; `--assistant-prefix` overrides it. The prefix is not part of
+`messages()`, so SemIf's prompt format is unchanged for every template that needs none.
+
 `instructions` and structured criteria are placed into the JSON payload as JSON values, not stringified.
 
 ## Answers

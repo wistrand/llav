@@ -7,7 +7,8 @@ Several questions about one state share its prefill. llama-server cannot roll a 
 (such as Qwen3.5) back to a shared prefix without context checkpoints, and saving a checkpoint copies
 the recurrent state off the GPU on every request. So the state prefix is evaluated once, saved to a
 slot file, and restored before each question; every question then extends the cached tokens exactly.
-llama-server must run with --ctx-checkpoints 0 and --slot-save-path.
+llama-server must run with --ctx-checkpoints 0 and --slot-save-path, and with --swa-full, without which a
+sliding-window model cannot extend a cached state.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import uuid
 from .native import NativeError, NativeReadout
 from .prompt import LABELS, evidence_opening, messages
 from .questions import Question
+from .templates import Profile, detect
 
 TEMPLATE_KWARGS = {"enable_thinking": False}
 
@@ -112,7 +114,7 @@ def softmax(values: list[float]) -> list[float]:
 class Engine:
     def __init__(self, client: LlamaClient, slots: int, slot_ctx: int, slot_dir: Path,
                  queue_timeout: float = 30, n_probs: int = 128, state_cache: int = 4,
-                 native: NativeReadout | None = None):
+                 native: NativeReadout | None = None, assistant_prefix: str | None = None):
         self.client = client
         self.slot_ctx = slot_ctx
         self.slot_dir = Path(slot_dir)
@@ -137,7 +139,11 @@ class Engine:
         self._run = uuid.uuid4().hex[:8]  # so stale files from an earlier run are never restored
         self._cached = OrderedDict()  # cache filename -> None, least recently used first
         self._cache_lock = threading.Lock()
+        # The template decides what, if anything, goes between its generation prompt and the answer letter.
+        self.profile: Profile = detect(client.render(messages("a", "b", ["Yes", "No"])))
+        self.assistant_prefix = self.profile.assistant_prefix if assistant_prefix is None else assistant_prefix
         self.trims = self._probe_trim()
+        self._probe_labels()
         self.native = native  # opt-in fast path; a failure here falls back to llama-server for good
 
     def _probe_trim(self) -> bool:
@@ -161,6 +167,26 @@ class Engine:
             return False  # a backend that cannot answer the probe gets the path that always works
         return evaluated <= len(base) // 2
 
+    def _probe_labels(self) -> None:
+        """Refuse to start when the model does not answer with a letter after this template.
+
+        Otherwise every request would fail with "No answer label", which says nothing about the cause: a
+        template that stops before the answer can begin, or a model that wants to start a sentence.
+        """
+        probe = Question("probe", "noul", "Is the sky blue?", ("true", "false"), ("Yes", "No"))
+        response = self.client.post("/completion", {
+            "prompt": self.encode("The sky is blue.", probe), "n_predict": 1, "temperature": -1,
+            "n_probs": self.n_probs, "cache_prompt": False, "id_slot": 0,
+        })
+        entries = (response.get("completion_probabilities") or [{}])[0].get("top_logprobs") or []
+        returned = {entry.get("id") for entry in entries}
+        if not returned & set(self.label_ids[:2]):
+            likely = ", ".join(repr(entry.get("token")) for entry in entries[:3])
+            raise EngineError(
+                f"The model does not answer with an option letter after this chat template (template profile "
+                f"{self.profile.name!r}, most likely next tokens: {likely}). If its answer needs a header first, "
+                "pass it with --assistant-prefix; see agent_docs/gotchas.md")
+
     def _boundary_ok(self, tail: str, count: int) -> bool:
         """Appending a label to the template tail must add exactly its token. Cached per tail."""
         with self._boundary_lock:
@@ -180,7 +206,8 @@ class Engine:
         if prompt.count(payload) != 1:
             raise EngineError("Cannot locate the user payload in the chat template")
         start = prompt.index(payload)
-        return prompt[:start], payload, prompt[start + len(payload):]
+        # A header the template leaves to the model, such as Muse Glimmer's recipient, belongs to the tail.
+        return prompt[:start], payload, prompt[start + len(payload):] + self.assistant_prefix
 
     def _template(self) -> tuple[str, str, list[int], list[int]]:
         """The template text around the payload, with its tokens. Rendered once, not once per question.

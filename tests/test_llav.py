@@ -25,6 +25,7 @@ from llav.openapi import document  # noqa: E402
 from llav.prompt import LABELS, SYSTEM, messages  # noqa: E402
 from llav.questions import ValidationError, build_answer, confidence, parse_request  # noqa: E402
 from llav.runtime import LlamaProcess  # noqa: E402
+from llav import templates  # noqa: E402
 from llav.server import WEB_UI, App, Handler, Server  # noqa: E402
 
 CONTROL = "<|im_end|>"
@@ -211,6 +212,22 @@ class NoulCriteriaTest(unittest.TestCase):
         self.assertEqual(score.instructions, "how bad?")
 
 
+MUSE_PROMPT = ('<|start|>system<|message|>SYS\n\nReasoning strength: high.\n\n# Valid recipients: "self", "user".'
+               '<|eot|><|start|>user<|message|>USER<|eot|><|start|>assistant')
+
+
+class TemplateProfileTest(unittest.TestCase):
+    def test_detects_muse_glimmer_from_its_template(self):
+        profile = templates.detect(MUSE_PROMPT)
+        self.assertEqual((profile.name, profile.assistant_prefix), ("muse-glimmer", " to=user<|message|>"))
+        self.assertLess(profile.low_mass, templates.DEFAULT.low_mass)
+
+    def test_other_templates_get_the_default(self):
+        self.assertIs(templates.detect("<|im_start|>user\nq<|im_end|>\n<|im_start|>assistant\n"), templates.DEFAULT)
+        # The marker alone is not enough: the template must also stop before the header.
+        self.assertIs(templates.detect(MUSE_PROMPT + " to=user<|message|>"), templates.DEFAULT)
+
+
 class EngineTest(unittest.TestCase):
     def setUp(self):
         self.slot_dir = tempfile.TemporaryDirectory()
@@ -220,6 +237,21 @@ class EngineTest(unittest.TestCase):
 
     def engine(self, client, slot_ctx=100_000):
         return Engine(client, 1, slot_ctx, Path(self.slot_dir.name), queue_timeout=1)
+
+    def test_assistant_prefix_ends_every_prompt(self):
+        client = FakeClient()
+        engine = Engine(client, 1, 100_000, Path(self.slot_dir.name), queue_timeout=1, assistant_prefix=" to=user:")
+        _, _, (question,) = parse_request(request({"a": {"type": "noul", "instructions": "q"}}))
+        ids = engine.encode("state", question)
+        self.assertTrue(client.detokenize(ids).endswith("<assistant>\n to=user:"))
+        prefix, encoded = engine.encode_all("state", [question])
+        self.assertEqual(encoded[0], ids)
+        self.assertEqual(engine.profile, templates.DEFAULT)
+
+    def test_refuses_to_start_when_no_letter_follows_the_template(self):
+        client = FakeClient(scores={"x": -0.05})  # the model wants to write something else
+        with self.assertRaisesRegex(EngineError, "--assistant-prefix"):
+            self.engine(client)
 
     def test_single_question_scores_fresh(self):
         client = FakeClient()
@@ -708,6 +740,25 @@ class LlamaProcessTest(unittest.TestCase):
                              Path(directory) / "log", [])
             self.assertEqual(len(started), 1)
             self.assertIsNotNone(started[0].poll())
+
+    def test_starts_llama_server_with_the_flags_llav_relies_on(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "fake-llama-server"
+            binary.write_text("#!/bin/sh\nexec sleep 60\n")
+            binary.chmod(0o755)
+            commands = []
+
+            def interrupted(process, load_timeout):
+                commands.append(process.command)
+                raise KeyboardInterrupt
+
+            with mock.patch.object(LlamaProcess, "_wait_ready", interrupted), self.assertRaises(KeyboardInterrupt):
+                LlamaProcess(str(binary), Path("model.gguf"), 1, 1, 8, Path(directory),
+                             Path(directory) / "log", [])
+            command = commands[0]
+            self.assertEqual(command[command.index("--ctx-checkpoints") + 1], "0")
+            self.assertIn("--slot-save-path", command)
+            self.assertIn("--swa-full", command)
 
     def test_busy_port_is_refused_before_starting(self):
         with socket.socket() as busy, tempfile.TemporaryDirectory() as directory:

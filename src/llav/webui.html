@@ -448,9 +448,9 @@ function bars(entries, best) {
   ]));
 }
 
-// Below this share of the model's probability, the options were not what it wanted to say. A display cue,
-// not a measured threshold; see agent_docs/research.md.
-const LOW_MASS = 0.9;
+// Below this share of the model's probability, the options were not what it wanted to say. The server reports
+// the cue for its model's template (backend.low_candidate_mass); 0.9 suits Qwen and older servers.
+let lowMass = 0.9;
 
 function renderAnswer(key, answer, title, mass) {
   const result = el("div", { class: "result" });
@@ -477,7 +477,7 @@ function renderAnswer(key, answer, title, mass) {
     scale.append(el("div", { class: "mark", style: `left: ${(100 * answer.score) / (levels - 1)}%` }));
     card.append(scale, ...bars(entries.map(([i, p]) => [answer.legend[i], p]), answer.legend[bestIndex]));
   }
-  const offOptions = Number.isFinite(mass) && mass < LOW_MASS;
+  const offOptions = Number.isFinite(mass) && mass < lowMass;
   const [word, tone] = offOptions ? ["No option fits", "low"] : sureness(top);
   result.append(el("span", { class: "sure " + tone, text: word }));
   if (offOptions) {
@@ -562,6 +562,7 @@ async function run() {
       return;
     }
     const masses = massHeader ? massHeader.split(",").map(Number) : [];
+    await loaded;
     const calibration = response.headers.get("X-Llav-Calibration");
     if (calibration && calibration !== "none") {
       $("#note").textContent = `Percentages are calibrated with the server's temperature file ${calibration}, fitted on `
@@ -618,7 +619,9 @@ async function status() {
       $("#status").textContent = "API key needed";
       return;
     }
-    modelId = (await models.json()).data[0].id;
+    const model = (await models.json()).data[0];
+    modelId = model.id;
+    if (model.backend && Number.isFinite(model.backend.low_candidate_mass)) lowMass = model.backend.low_candidate_mass;
     known = true;
     $("#status").textContent = "Ready · " + modelId;
   } catch (_) {
@@ -635,7 +638,7 @@ document.querySelectorAll("[data-add]").forEach((button) => {
 });
 $("#clear").addEventListener("click", () => fill({ state: "", questions: [{ type: "noul" }] }));
 $("#run").addEventListener("click", run);
-$("#key").addEventListener("change", () => { known = false; status(); });
+$("#key").addEventListener("change", () => { known = false; loaded = status(); });
 $("#copy-curl").addEventListener("click", async (event) => {
   const built = lastRequest ? { request: lastRequest } : buildRequest();
   if (!built) return;
@@ -657,7 +660,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); run(); }
 });
 load();
-status();
+let loaded = status();  // run() waits for it: the low-mass cue comes from /v1/models
 setInterval(status, 30000);
 </script>
 </body>

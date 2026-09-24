@@ -186,6 +186,8 @@ int main(int argc, char ** argv) {
     ctx_params.n_seq_max = static_cast<uint32_t>(args.seq) + 1;  // sequence 0 holds the prefix
     ctx_params.n_threads = args.threads;
     ctx_params.n_threads_batch = args.threads;
+    // As llama-server's --swa-full: a sliding-window model keeps the whole prefix, so suffixes can extend it.
+    ctx_params.swa_full = true;
     llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (ctx == nullptr) {
         fprintf(stderr, "llav-readout: cannot create a context\n");

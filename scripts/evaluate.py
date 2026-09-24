@@ -60,7 +60,7 @@ import urllib.request
 EPSILON = 1e-12
 BINS = 10
 ERROR_TARGETS = (0.01, 0.05, 0.10)
-# The web UI's "No option fits" cue; see LOW_MASS in src/llav/webui.html.
+# The web UI's "No option fits" cue for servers that do not report their own (backend.low_candidate_mass).
 LOW_MASS = 0.9
 
 ROWS_API = "https://datasets-server.huggingface.co/rows"
@@ -244,13 +244,14 @@ def ask(url: str, state, questions: dict) -> tuple[dict, dict]:
         return json.load(response), dict(response.headers)
 
 
-def served_model_file(url: str) -> str | None:
-    """The model file llav reports in /v1/models, so `fit` can check it against the file it hashes."""
+def served_backend(url: str) -> dict:
+    """llav's backend details from /v1/models: the model file `fit` checks, and the low-mass cue."""
     try:
         with urllib.request.urlopen(url + "/v1/models", timeout=30) as response:
-            return json.load(response)["data"][0]["backend"].get("model_file")
+            backend = json.load(response)["data"][0]["backend"]
+            return backend if isinstance(backend, dict) else {}
     except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
-        return None  # not llav, or an older one
+        return {}  # not llav, or an older one
 
 
 def load(paths: list[str], limit: int | None) -> list[dict]:
@@ -390,7 +391,8 @@ def score(args) -> None:
     for item in items:  # questions about the same state go in one request, as a caller would send them
         by_state.setdefault(json.dumps(item["state"], sort_keys=True), []).append(item)
     records, started = [], time.perf_counter()
-    model_file = served_model_file(args.url)
+    backend = served_backend(args.url)
+    model_file = backend.get("model_file")
     for group in by_state.values():
         body, headers = ask(args.url, group[0]["state"], {f"q{i}": item["question"] for i, item in enumerate(group)})
         answers = list(body["answers"].values())
@@ -409,24 +411,24 @@ def score(args) -> None:
     print_thresholds(by_source(records))
     print()
     print_bins(records)
-    print_mass(records)
+    print_mass(records, backend.get("low_candidate_mass", LOW_MASS))
     if args.out:
         Path(args.out).write_text("".join(json.dumps(record) + "\n" for record in records))
 
 
-def print_mass(records: list[dict]) -> None:
+def print_mass(records: list[dict], low_mass: float) -> None:
     known = [record for record in records if record["mass"] is not None]
     if not known:
         print("candidate mass not reported (not llav, or an llav without X-Llav-Candidate-Mass)")
         return
-    low = [record for record in known if record["mass"] < LOW_MASS]
-    high = [record for record in known if record["mass"] >= LOW_MASS]
+    low = [record for record in known if record["mass"] < low_mass]
+    high = [record for record in known if record["mass"] >= low_mass]
     print(f"candidate mass: median {statistics.median(r['mass'] for r in known):.4f}, "
-          f"min {min(r['mass'] for r in known):.4f}; below {LOW_MASS}: {len(low)} questions")
+          f"min {min(r['mass'] for r in known):.4f}; below {low_mass}: {len(low)} questions")
     for name, group in (("below", low), ("at or above", high)):
         if group:
             accuracy = statistics.fmean(top(record["probs"])[0] == record["label"] for record in group)
-            print(f"  accuracy {name} {LOW_MASS}: {100 * accuracy:.1f}% of {len(group)}")
+            print(f"  accuracy {name} {low_mass}: {100 * accuracy:.1f}% of {len(group)}")
 
 
 # Option order

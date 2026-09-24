@@ -61,6 +61,10 @@ def main(argv: list[str] | None = None) -> None:
                         help="Questions the helper takes in one pass; larger requests use llama-server")
     parser.add_argument("--state-cache", type=int, default=4,
                         help="Evaluated states kept as slot files for reuse by later requests (0 disables)")
+    parser.add_argument("--assistant-prefix", metavar="TEXT",
+                        help="Template text between the chat template's generation prompt and the answer letter, "
+                             "for templates that make the model write a header first (default: chosen from the "
+                             "template, e.g. ' to=user<|message|>' for Muse Glimmer; '' for none)")
     parser.add_argument("--calibration", type=Path, metavar="FILE",
                         help="Temperature calibration from 'scripts/evaluate.py fit'; must match the model")
 
@@ -74,8 +78,8 @@ def main(argv: list[str] | None = None) -> None:
                        help="Extra llama-server argument, repeatable, e.g. --llama-arg=-dev --llama-arg=Vulkan0")
 
     attach = parser.add_argument_group("external llama-server")
-    attach.add_argument("--llama-url", help="Use a running llama-server started with --ctx-checkpoints 0 "
-                                            "and --slot-save-path")
+    attach.add_argument("--llama-url", help="Use a running llama-server started with --ctx-checkpoints 0, "
+                                            "--slot-save-path and --swa-full")
     attach.add_argument("--slot-dir", type=Path, help="That server's --slot-save-path directory")
     args = parser.parse_args(argv)
 
@@ -144,7 +148,10 @@ def main(argv: list[str] | None = None) -> None:
             sys.stderr.write(f"starting the native readout helper ({args.native_readout})\n")
             native = NativeReadout(args.native_readout, args.gguf, [], slot_ctx, args.native_questions)
         engine = Engine(client, slots, slot_ctx, slot_dir, args.queue_timeout, state_cache=args.state_cache,
-                        native=native)
+                        native=native, assistant_prefix=args.assistant_prefix)
+        if engine.profile.name != "default" or engine.assistant_prefix:
+            sys.stderr.write(f"chat template profile {engine.profile.name}: assistant prefix "
+                             f"{engine.assistant_prefix!r}, low candidate mass below {engine.profile.low_mass}\n")
         if native:
             native.labels = engine.label_ids  # the helper reads whatever labels the engine tokenized
         model_id = args.model_id or f"llav-{source.stem.lower()}"
@@ -152,7 +159,9 @@ def main(argv: list[str] | None = None) -> None:
         health = (lambda: process.alive()) if process else (lambda: True)
         backend = {"runtime": "llama.cpp", "model_file": source.name, "slots": slots, "slot_ctx": slot_ctx,
                    "prefix_reuse": "native" if engine.native else ("trim" if engine.trims else "slot-file"),
-                   "calibration": calibration.id if calibration else None}
+                   "calibration": calibration.id if calibration else None,
+                   "template_profile": engine.profile.name, "assistant_prefix": engine.assistant_prefix,
+                   "low_candidate_mass": engine.profile.low_mass}
         web_ui = WEB_UI.read_bytes() if args.web_ui else None
         serve(httpd, App(engine, model_id, aliases, args.api_key, backend, health, web_ui, calibration))
     except (CalibrationError, EngineError, NativeError, RuntimeError, OSError) as error:

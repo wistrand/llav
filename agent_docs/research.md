@@ -18,6 +18,7 @@ llama.cpp build 10809, Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `
 - Temperature calibration
 - The normalizer's cost in the native helper
 - Comparison with CLM
+- Muse Glimmer 30B, a test
 - Open questions
 
 ## Prompt fidelity and agreement
@@ -444,7 +445,9 @@ Findings:
   the suspected cause, not confirmed. Gemma 3 4B was also biased toward `A`.
 - **Failures come in two kinds.** Granite 4.0 1B (`**`) and LFM2.5-2.6B (`The`, 92–95%) want to start a
   sentence, so the letters get no mass and the softmax over them is noise. Gemma 3, Llama 3.2 1B and Granite
-  4.0 350M do answer with a letter but by position: reversing the options flips most choices.
+  4.0 350M do answer with a letter but by position: reversing the options flips most choices. Since
+  2026-09-24 the first kind is refused at startup when no letter is among the likely next tokens
+  (`Engine._probe_labels`); when the letters get some mass but little, `X-Llav-Candidate-Mass` shows it.
 - **The speed gain from small models is capped** by per-question overhead on this laptop (see "Where a
   request's time goes").
 
@@ -508,6 +511,10 @@ The optimizations did not reorder anything. They cut every model's repeat cost t
 which narrows the speed argument for a weaker model, and the trim path is worth less than the model's own
 size: Granite 4.2 3B trims and is still slower than Granite 4.0 H Tiny, which restores a slot file but
 activates about 1B parameters.
+
+Muse Glimmer 30B was pinned later (2026-09-24) and is not in this ranking: it needs about 18 GB of GPU memory,
+which the laptop does not have. On the labelled set it matched the default's accuracy with better
+calibration; see "Muse Glimmer 30B, a test".
 
 `scripts/fetch-model.sh` pins the default plus Qwen3.5-2B, Granite 4.0 H Tiny, Granite 4.2 3B and SmolLM3-3B.
 Granite 4.0 Micro was dropped: Granite 4.2 3B matched or beat it on every measure. A few-shot prompt or a
@@ -754,6 +761,76 @@ llav's column is after the letter fix, uncalibrated.
   better than one that scores them apart. Agent action choice is untested for llav and would need its own
   labelled source before comparing there.
 
+## Muse Glimmer 30B, a test
+
+Meta's `Muse-Glimmer-30B` (Apache 2.0), `meta-models/Muse-Glimmer-30B-GGUF` Q4_K_M, 16.8 GB, SHA-256
+checked, on the RTX PRO 4000 box, 2026-09-24, llama.cpp built that day. Through llama-server only: the helper
+would need a second copy of the weights, which does not fit 24 GB. A dense 30B with hybrid attention: local
+sliding-window layers (2,048 tokens) between global ones.
+
+- **Unusable as llav stands.** Every request failed with "No answer label among the returned token
+  probabilities". The chat template ends at `<|start|>assistant`, and the model's next token is ` to` at
+  probability 1.0: its messages open with a recipient header (`to=user` or `to=self`, as the system turn
+  lists), so no letter can come next. The template also adds "Reasoning strength: high." to the system
+  turn; `enable_thinking: false` does nothing to it.
+- **With a header prefilled it works.** Appending ` to=user<|message|>` to the template tail (a box-only
+  patch, not in the repo) put 0.63 on A, 0.06 on B and 0.03 on C for the README ticket. With
+  ` to=user<|channel|>final<|message|>` it preferred to open JSON (`{"`, 0.47).
+- **Sliding-window attention defeats prefix reuse without `--swa-full`.** The startup probe chose the
+  slot-file path, and every question re-read the whole state even after a restore: 10 questions on a
+  1,759-token state evaluated 18,048 tokens on a repeat request and took 19.7 s. With
+  `--llama-arg=--swa-full` the probe chose trimming and the same request evaluated 399 tokens:
+
+  | 10 questions, 1,754-token state | Default | `--swa-full` |
+  |---------------------------------|--------:|-------------:|
+  | First request                   | 14.25 s |       1.94 s |
+  | Repeat request                  | 19.72 s |       0.62 s |
+
+  GPU memory was about the same (16 GB); the model has 2 KV heads, so the full window costs little at llav's
+  8,192-token slots. This is likely the cause of the Gemma slowness under "Other models" (inference; Gemma
+  was not rerun).
+- **Accuracy matches Qwen3.5-4B overall, calibration is better.** `benchmark.py accuracy`: 19/19 easy, 17/17
+  hard, 0/11 order flips, rule placement 0.93 to 1.00. `evaluate.py score` on the 1,176 labelled questions
+  (with the prefill):
+
+  | Source                        | Muse acc | Qwen acc | Muse ECE | Qwen ECE |
+  |-------------------------------|---------:|---------:|---------:|---------:|
+  | DBpedia                       |    98.7% |    98.2% |    0.057 |    0.013 |
+  | SemIf evidence interpretation |    97.9% |    95.8% |    0.080 |    0.052 |
+  | SemIf candidate selection     |   100.0% |    95.8% |    0.176 |    0.065 |
+  | BoolQ                         |    90.5% |    92.5% |    0.046 |    0.038 |
+  | Banking77 card intents        |    86.1% |    75.0% |    0.053 |    0.124 |
+  | SemIf rule application        |    83.3% |    89.6% |    0.114 |    0.076 |
+  | AG News                       |    75.5% |    80.5% |    0.078 |    0.113 |
+  | Yelp stars                    |    54.0% |    59.0% |    0.225 |    0.204 |
+  | All                           |    82.9% |    82.9% |    0.037 |    0.069 |
+
+  Answers above 0.9 averaged 0.957 and were right 97.3% of the time, against Qwen's 0.986 and 93.2%.
+- **Candidate mass is low even when right:** median 0.62, minimum 0.18, every answer below 0.9; the rest goes
+  to tokens like `{"` and `The`. The web UI's "No option fits" cue (`LOW_MASS`, 0.9) would flag every Muse
+  answer, so that cue is Qwen's, not general. The no-fit check still separated: 0.67 when an option fits,
+  0.45 when none does.
+- **Speed:** 321 s for the labelled set without `--swa-full` and without the helper, against 107 s for Qwen
+  with it. With `--swa-full` the repeat request above (0.62 s) is about three times Qwen's with the helper.
+
+Since 2026-09-24 llav serves it with no options: `templates.detect` recognises the template and appends
+the header, `--swa-full` is a default, and the profile's low-mass cue is 0.35, where the labelled set split
+into 35% right below and 86% right above (78 and 1,098 questions). Run that way on the box it reported
+`prefix_reuse: trim`, answered 19/19 easy and 17/17 hard, and took 1.87 s for a first request of 10
+questions and 0.63 s for a repeat. `muse-glimmer-30b` is pinned in `scripts/fetch-model.sh`.
+
+`--swa-full` is now in the flags `LlamaProcess` passes. On Qwen3.5-4B, which has no sliding-window layers, it
+changed nothing, measured the same day with `benchmark.py timing` and `accuracy` before and after:
+
+| Qwen3.5-4B, 10 questions, 1,820 tokens | First request, before / after | Repeat, before / after |
+|----------------------------------------|------------------------------:|-----------------------:|
+| RTX PRO 4000, llama-server             |              0.73 s / 0.75 s |        0.42 s / 0.42 s |
+| Arc B390 laptop, Vulkan, llama-server  |              4.57 s / 4.47 s |        1.71 s / 1.73 s |
+
+Evaluated tokens, GPU memory (4,971 MiB on the box), answers and candidate masses were identical; the probe
+still chose the slot-file path. The native helper creates its own context and does not read the flag; its
+repeat request stayed at 124 ms.
+
 ## Open questions
 
 - Accuracy of llav's own wording against labelled data: measured on public samples and `authored144` (see
@@ -762,15 +839,18 @@ llav's column is after the letter fix, uncalibrated.
   quantization: untested.
 - The native helper batches questions on libllama as torch's shared mode does; a direct throughput
   comparison with SemIf's torch runner on the same GPU has not been run.
-- Accuracy of the alternative models in `scripts/fetch-model.sh` on labelled data: unmeasured.
-  `scripts/evaluate.py score` against each would answer it.
+- Accuracy of the alternative models in `scripts/fetch-model.sh` on labelled data: measured for Muse Glimmer
+  30B only. `scripts/evaluate.py score` against each of the others would answer it.
+- Muse Glimmer 30B through the native helper: untested. The helper holds a second copy of the weights, so it
+  needs about 35 GB of GPU memory; the 24 GB box cannot hold both.
 - Why reading llama.cpp's logits buffer costs about ten times more than reading an ordinary array
   (see "The normalizer's cost in the native helper"): not investigated.
 - Agent action choice (tool calls, commands, UI actions), where CLM reports its results: no labelled source
   in `scripts/evaluate.py`, so llav is unmeasured there.
 - Names that collide with answer letters only inside the state ("Candidate A" with keys `first`, `second`):
   `_align_letters` does not cover them, and no labelled set tests them.
-- Why Gemma models are 4 to 7 times slower under llav (sliding-window attention with slot restore is the
-  suspect): not investigated.
+- Why Gemma models are 4 to 7 times slower under llav: sliding-window attention without `--swa-full`
+  is the likely cause, since it caused the same symptom on Muse Glimmer (see that section); Gemma has
+  not been rerun with the flag.
 - Throughput beyond the three machines measured here: the scaling table is an extrapolation; replace its
   rows with measurements when a machine becomes available.

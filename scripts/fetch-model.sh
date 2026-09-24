@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download a pinned Q8_0 GGUF and verify its SHA-256.
+# Download a pinned GGUF (Q8_0, or Q4_K_M for the 30B) and verify its SHA-256.
 #   scripts/fetch-model.sh [DIR] [MODEL]    (default: current directory, qwen3.5-4b)
 # MODEL is one of:
 #   qwen3.5-4b          Qwen3.5-4B, the default; the validation in agent_docs/research.md used it
@@ -7,6 +7,7 @@
 #   granite-4.0-h-tiny  IBM Granite 4.0 H Tiny (7B MoE, about 1B active), Apache 2.0
 #   granite-4.2-3b      IBM Granite 4.2 3B, Apache 2.0
 #   smollm3-3b          Hugging Face SmolLM3-3B, Apache 2.0
+#   muse-glimmer-30b    Meta Muse Glimmer 30B, Apache 2.0, Q4_K_M 16.8 GB; needs a GPU with about 18 GB free
 # Only the default is validated; agent_docs/research.md has the screening results for the others.
 set -euo pipefail
 
@@ -44,8 +45,15 @@ case "$model" in
     file=SmolLM3-Q8_0.gguf
     sha256=8aa8cc74656137174a1988d993b00828e65a86fd68773412b632a75aa1373248
     ;;
+  muse-glimmer-30b)
+    repo=meta-models/Muse-Glimmer-30B-GGUF
+    revision=70bf1b61ac09f91b24d39038091b41c582bc5d7a
+    file=Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf
+    sha256=4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e
+    ;;
   *)
-    echo "Unknown model '$model'; choose qwen3.5-4b, qwen3.5-2b, granite-4.2-3b, granite-4.0-h-tiny or smollm3-3b" >&2
+    echo "Unknown model '$model'; choose qwen3.5-4b, qwen3.5-2b, granite-4.2-3b, granite-4.0-h-tiny, smollm3-3b" \
+      "or muse-glimmer-30b" >&2
     exit 2
     ;;
 esac

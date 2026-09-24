@@ -56,6 +56,10 @@ class LlamaProcess:
             binary, "-m", str(gguf), "--host", "127.0.0.1", "--port", str(port),
             "-ngl", "all", "-np", str(slots), "-c", str(slots * slot_ctx),
             "--ctx-checkpoints", "0", "--slot-save-path", str(slot_dir),
+            # A sliding-window model keeps only the last window by default, so a question cannot extend a
+            # cached state and re-reads all of it: 19.7 s against 0.62 s for 10 questions on Muse Glimmer.
+            # Models without sliding windows ignore the flag (agent_docs/research.md).
+            "--swa-full",
             "--jinja", "--chat-template-kwargs", json.dumps(TEMPLATE_KWARGS),
             "--no-webui", *extra,
         ]

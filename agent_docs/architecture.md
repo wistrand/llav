@@ -39,21 +39,22 @@ llama-server's HTTP API, and shapes answers. Global rules are in
 
 ## Components
 
-| Unit            | File             | Responsibility                                                            |
-|-----------------|------------------|---------------------------------------------------------------------------|
-| `main`          | `cli.py`         | Parse flags; start `LlamaProcess` or attach via `--llama-url`; cleanup    |
-| `Handler`       | `server.py`      | Routes, bearer auth, body limits, JSON errors, `X-Llav-*` headers         |
-| `document`      | `openapi.py`     | OpenAPI 3.1 spec from the code; served at `/openapi.json`                 |
-| `NativeReadout` | `native.py`      | Optional helper process: one batched pass for all questions               |
-| `Calibration`   | `calibration.py` | Optional per-type temperature from `--calibration`; checks the model      |
-| `parse_request` | `questions.py`   | Validate the body into `(state, model, [Question])`                       |
-| `Question`      | `questions.py`   | Frozen per-question data: option ids, what the model reads, caller order  |
-| `build_answer`  | `questions.py`   | Turn probabilities into a `noul` / `choice` / `score` answer              |
-| `messages`      | `prompt.py`      | System instruction plus JSON payload `{evidence, criterion, options}`     |
-| `LlamaClient`   | `engine.py`      | JSON over HTTP to llama-server; any failure becomes `EngineError`         |
-| `Engine`        | `engine.py`      | Label token ids, encoding, slot pool, readout, shared-state orchestration |
-| `LlamaProcess`  | `runtime.py`     | Spawn llama-server with required flags, wait for `/health`, stop on exit  |
-| web UI          | `webui.html`     | `--web-ui` page at `GET /`; calls the public API like any client          |
+| Unit            | File             | Responsibility                                                             |
+|-----------------|------------------|----------------------------------------------------------------------------|
+| `main`          | `cli.py`         | Parse flags; start `LlamaProcess` or attach via `--llama-url`; cleanup     |
+| `Handler`       | `server.py`      | Routes, bearer auth, body limits, JSON errors, `X-Llav-*` headers          |
+| `document`      | `openapi.py`     | OpenAPI 3.1 spec from the code; served at `/openapi.json`                  |
+| `NativeReadout` | `native.py`      | Optional helper process: one batched pass for all questions                |
+| `Calibration`   | `calibration.py` | Optional per-type temperature from `--calibration`; checks the model       |
+| `detect`        | `templates.py`   | Template profile: assistant prefix and low-mass cue from the rendered text |
+| `parse_request` | `questions.py`   | Validate the body into `(state, model, [Question])`                        |
+| `Question`      | `questions.py`   | Frozen per-question data: option ids, what the model reads, caller order   |
+| `build_answer`  | `questions.py`   | Turn probabilities into a `noul` / `choice` / `score` answer               |
+| `messages`      | `prompt.py`      | System instruction plus JSON payload `{evidence, criterion, options}`      |
+| `LlamaClient`   | `engine.py`      | JSON over HTTP to llama-server; any failure becomes `EngineError`          |
+| `Engine`        | `engine.py`      | Label token ids, encoding, slot pool, readout, shared-state orchestration  |
+| `LlamaProcess`  | `runtime.py`     | Spawn llama-server with required flags, wait for `/health`, stop on exit   |
+| web UI          | `webui.html`     | `--web-ui` page at `GET /`; calls the public API like any client           |
 
 ## Request flow
 
@@ -131,6 +132,12 @@ answer the readiness probe while the new llama-server fails to bind, and llav wo
 
 With `--llama-url`, llav reads the slot count and per-slot context from `/props` and uses `--slot-dir` for
 slot files; that server must already run with the flags `LlamaProcess` would pass.
+
+`Engine.__init__` also renders the chat template once and picks its profile (`templates.detect`): the
+assistant prefix `_split` appends to the template tail, unless `--assistant-prefix` overrides it, and the
+low-mass cue reported in `/v1/models`. After the trim probe, `_probe_labels` asks one easy question and
+raises `EngineError` when no answer letter is among the returned `n_probs`, so a template that stops before
+the answer, or a model that wants to write a sentence, fails at startup instead of on every request.
 
 `--calibration` is loaded before anything starts, and a malformed file or one for another prompt version is
 a usage error. With `--gguf`, the file's model hash is checked against the model file before llama-server

@@ -31,12 +31,13 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
 | `src/llav/native.py`       | `NativeReadout`: the optional helper's process and protocol            |
 | `src/llav/calibration.py`  | `Calibration`: optional per-type temperature file, model hash check    |
+| `src/llav/templates.py`    | `detect()`: per-template defaults (assistant prefix, low-mass cue)     |
 | `native/llav-readout.cpp`  | That helper: batched readout against libllama; see native/README.md    |
 | `tests/test_llav.py`       | Unit tests with a fake llama-server; no model needed                   |
 | `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
 | `scripts/benchmark.py`     | `accuracy`, `timing`, `articles`, `fetch`, `phases` against a llav     |
 | `scripts/evaluate.py`      | Labelled data: accuracy, Brier, ECE, coverage; option-order `shifts`   |
-| `scripts/fetch-model.sh`   | Downloads a pinned Q8_0 GGUF (Qwen3.5-4B default) and checks SHA-256   |
+| `scripts/fetch-model.sh`   | Downloads a pinned GGUF (Qwen3.5-4B default) and checks SHA-256        |
 | `scripts/remote-gpu.sh`    | Starts llav on a rented CUDA box over SSH; NATIVE=1, TS_AUTHKEY=...    |
 | `agent_docs/`              | Deep dives, linked below                                               |
 | `docs/`                    | README screenshots; retake them when the web UI changes                |
@@ -83,9 +84,11 @@ Quick start lists install options per platform; `native/README.md` covers the op
   `logit_bias`.
 - Always tokenize caller text (state, instructions, criteria) with `parse_special: false`, so it cannot
   forge chat-template control tokens. Only template text is tokenized with special-token parsing.
-- Always run llama-server with `--ctx-checkpoints 0` and `--slot-save-path`. Whether a slot's cache may be
+- Always run llama-server with `--ctx-checkpoints 0`, `--slot-save-path` and `--swa-full`. Whether a slot's cache may be
   reused between questions is decided by `Engine`'s startup probe (`trims`), never by a model name; a
   backend that fails the probe restores the saved prefix before every question.
+- Always choose per-model behaviour from what the template or backend does (`templates.detect`, the trim
+  probe), never from the model's name or file name.
 - Never let a cached slot file outlive the state that produced it: files are keyed by the prefix tokens and
   a per-run id, evicted by `--state-cache`, and deleted in `Engine.clear_cache` at shutdown.
 - Always return a slot to `Engine.free` in a `finally`, or the server loses capacity permanently.
