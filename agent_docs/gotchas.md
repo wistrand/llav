@@ -37,6 +37,17 @@
   state alone ("Candidate A" with keys `first`, `second`) are not covered.
 - **The native helper's protocol is versioned in its ready line.** A binary built before the candidate-mass
   normalizer was added is refused at startup with "rebuild it from native/". Rebuild after pulling.
+- **`llama_decode` aborts the process on a batch larger than `n_batch`.** It fails
+  `GGML_ASSERT(n_tokens_all <= cparams.n_batch)` instead of returning an error. The helper decoded every
+  suffix in one batch, so 12 Banking77 questions (2,108 tokens, `n_batch` 2048) killed it, and llav then ran
+  without the helper for the rest of its life; a state over 2,048 tokens did the same through the prefix
+  decode. The helper now splits both into chunks of `llama_n_batch(ctx)` tokens and copies each chunk's
+  logits before the next decode. Chunked answers match unchunked ones as closely as the batched decode
+  matches llama-server. Found 2026-09-25; a helper built from older source still crashes, so rebuild.
+- **Scripts that stop llav on a box.** A background job in a non-interactive shell ignores SIGINT, so
+  `kill -INT` never stops it; send SIGTERM, which `cli.py` handles like Ctrl-C. And a `pgrep -f` pattern
+  that appears literally in the calling script's own command line matches that shell: anchor it
+  (`pgrep -f "^python3 -m llav"`) or bracket a character. Both cost runs on 2026-09-25 and 26.
 - **Reading llama.cpp's logits buffer is slow.** A serial pass over the 248k-entry vocabulary per question
   cost about 19 ms on the RTX PRO 4000 box, against 1.5 ms over an ordinary array, and made a repeat request
   2.5 times slower. `log_normalizers` in the helper vectorizes and threads it; keep any new per-logit work
@@ -62,9 +73,19 @@
   many sequences costs gigabytes. See [comparisons.md](comparisons.md#muse-glimmer-30b-a-test).
 - **Some chat templates stop before the answer can start.** Muse Glimmer's template ends at
   `<|start|>assistant`, and the model must write a recipient header (` to=user<|message|>`) first; without
-  it no label is in the top `n_probs`. `templates.detect` recognises the template and supplies the header;
-  a new template of this kind needs an entry in `_KNOWN` there, or `--assistant-prefix`. `_probe_labels`
-  makes an unknown one fail at startup with a hint instead of on every request.
+  it no label is in the top `n_probs`. gpt-oss (OpenAI's Harmony format) is the same case: the next token
+  is `<|channel|>` with all the mass, and the profile supplies `<|channel|>final<|message|>` (found
+  2026-09-26; gpt-oss-20b then scores 18/19 and 16/17 on `benchmark.py accuracy`). `templates.detect`
+  recognises both templates and supplies the header; a new template of this kind needs an entry in `_KNOWN`
+  there, or `--assistant-prefix`. `_probe_labels` makes an unknown one fail at startup with a hint instead
+  of on every request.
+- **A model can pass the startup probe and still not answer with letters.** The probe only requires a
+  label among the top `n_probs` on one easy question. Gemma 4 12B passes it, then on real questions puts 2%
+  of its mass on the letters and wants to write prose (`Based`, `The`; with thinking correctly off), and no
+  assistant prefix tried (`Answer: `, `The answer is `, `Letter: `) made a letter its next token. It ignores
+  "respond with only its uppercase letter"; the E4B of the same family follows it and scores like
+  Qwen3.5-4B. Screening (`agent_docs/comparisons.md`) catches this, the probe does not; a stricter probe
+  (mass on the labels above some share) is an open question.
 - **The low candidate-mass cue is per template profile.** 0.9 suits Qwen3.5-4B (0.999 when answering, 0.57
   when no option fits); Muse Glimmer answers correctly at a median of 0.62, so its profile uses 0.35. The web
   UI and `scripts/evaluate.py` read it from `backend.low_candidate_mass`. Muse's no-fit signal is weaker

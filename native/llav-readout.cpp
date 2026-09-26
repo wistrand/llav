@@ -4,9 +4,9 @@
 //
 // Speaks a binary protocol on stdin/stdout so llav needs no parser on either side. One request holds a
 // state prefix and every question's suffix; the prefix is decoded once, copied to one sequence per
-// question with llama_memory_seq_cp, and all suffixes are decoded in a single llama_decode. That is the
-// point of this program: llama-server evaluates each question in its own pass, which costs a fixed
-// per-pass overhead that dominates on a fast GPU.
+// question with llama_memory_seq_cp, and all suffixes are decoded together, in as few llama_decode calls as
+// the context's batch size allows. That is the point of this program: llama-server evaluates each question in
+// its own pass, which costs a fixed per-pass overhead that dominates on a fast GPU.
 //
 // Request : "LLVR" n_prefix n_labels n_suffix, prefix tokens, label tokens, then per suffix: n, tokens.
 // Response: "LLVA" status evaluated, then per suffix n_labels raw logits followed by the log of the
@@ -27,6 +27,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <utility>
 #include <unistd.h>
 #include <vector>
 
@@ -208,6 +209,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
     llama_memory_t memory = llama_get_memory(ctx);
+    const int32_t n_batch = static_cast<int32_t>(llama_n_batch(ctx));
+    llama_batch batch = llama_batch_init(n_batch, 0, 1);  // reused for every decode
     const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
 
     // Tell llav the helper is up before it sends anything; it waits for this line.
@@ -253,17 +256,21 @@ int main(int argc, char ** argv) {
         if (prefix != resident) {
             llama_memory_clear(memory, true);
             resident.clear();
-            llama_batch batch = llama_batch_init(n_prefix, 0, 1);
-            batch.n_tokens = n_prefix;
-            for (int32_t i = 0; i < n_prefix; ++i) {
-                batch.token[i] = prefix[i];
-                batch.pos[i] = i;
-                batch.n_seq_id[i] = 1;
-                batch.seq_id[i][0] = 0;
-                batch.logits[i] = 0;
+            // In chunks of at most n_batch tokens: llama_decode aborts the process on a larger batch rather
+            // than returning an error.
+            int32_t status = 0;
+            for (int32_t start = 0; start < n_prefix && status == 0; start += n_batch) {
+                const int32_t count = std::min(n_batch, n_prefix - start);
+                batch.n_tokens = count;
+                for (int32_t i = 0; i < count; ++i) {
+                    batch.token[i] = prefix[start + i];
+                    batch.pos[i] = start + i;
+                    batch.n_seq_id[i] = 1;
+                    batch.seq_id[i][0] = 0;
+                    batch.logits[i] = 0;
+                }
+                status = llama_decode(ctx, batch);
             }
-            const int32_t status = llama_decode(ctx, batch);
-            llama_batch_free(batch);
             if (status != 0) {
                 fprintf(stderr, "llav-readout: prefix decode failed (%d)\n", status);
                 write_response(2, 0, {});
@@ -273,59 +280,68 @@ int main(int argc, char ** argv) {
             evaluated += n_prefix;
         }
 
-        // One sequence per question, each a copy of the prefix, then every suffix in one decode.
-        llama_batch batch = llama_batch_init(n_suffix_tokens, 0, 1);
-        batch.n_tokens = 0;
-        std::vector<int32_t> output_index(n_suffix, -1);
+        // One sequence per question, each a copy of the prefix, then the suffixes packed into as few decodes
+        // as n_batch allows. A suffix may span decodes; its logits come from the decode holding its last
+        // token and are copied out before the next decode reuses the buffer.
         for (int32_t i = 0; i < n_suffix; ++i) {
-            const llama_seq_id seq = i + 1;
-            llama_memory_seq_rm(memory, seq, -1, -1);
-            llama_memory_seq_cp(memory, 0, seq, -1, -1);
-            for (size_t j = 0; j < suffixes[i].size(); ++j) {
+            llama_memory_seq_rm(memory, i + 1, -1, -1);
+            llama_memory_seq_cp(memory, 0, i + 1, -1, -1);
+        }
+        std::vector<float> values(static_cast<size_t>(n_suffix) * (n_labels + 1));
+        int32_t status = 0;
+        int32_t question = 0;
+        size_t offset = 0;  // next token of suffixes[question]
+        while (question < n_suffix && status == 0) {
+            batch.n_tokens = 0;
+            std::vector<std::pair<int32_t, int32_t>> outputs;  // (question, index in this batch)
+            while (question < n_suffix && batch.n_tokens < n_batch) {
+                const std::vector<llama_token> & suffix = suffixes[question];
                 const int32_t at = batch.n_tokens++;
-                batch.token[at] = suffixes[i][j];
-                batch.pos[at] = n_prefix + static_cast<int32_t>(j);
+                batch.token[at] = suffix[offset];
+                batch.pos[at] = n_prefix + static_cast<int32_t>(offset);
                 batch.n_seq_id[at] = 1;
-                batch.seq_id[at][0] = seq;
-                batch.logits[at] = j + 1 == suffixes[i].size();
+                batch.seq_id[at][0] = question + 1;
+                batch.logits[at] = offset + 1 == suffix.size();
                 if (batch.logits[at]) {
-                    output_index[i] = at;
+                    outputs.emplace_back(question, at);
+                    ++question;
+                    offset = 0;
+                } else {
+                    ++offset;
                 }
             }
-        }
-        evaluated += n_suffix_tokens;
-        const int32_t status = llama_decode(ctx, batch);
-        llama_batch_free(batch);
-        if (status != 0) {
-            fprintf(stderr, "llav-readout: suffix decode failed (%d)\n", status);
-            write_response(3, 0, {});
-            continue;
-        }
-
-        std::vector<const float *> rows;
-        for (int32_t i = 0; i < n_suffix; ++i) {
-            const float * logits = llama_get_logits_ith(ctx, output_index[i]);
-            if (logits == nullptr) {
+            status = llama_decode(ctx, batch);
+            if (status != 0) {
                 break;
             }
-            rows.push_back(logits);
+            std::vector<const float *> rows;
+            for (const auto & [index, at] : outputs) {
+                rows.push_back(llama_get_logits_ith(ctx, at));
+            }
+            if (std::find(rows.begin(), rows.end(), nullptr) != rows.end()) {
+                status = -1;
+                break;
+            }
+            const std::vector<float> normalizers = log_normalizers(rows, n_vocab, args.threads);
+            for (size_t k = 0; k < outputs.size(); ++k) {
+                float * out = &values[static_cast<size_t>(outputs[k].first) * (n_labels + 1)];
+                for (int32_t j = 0; j < n_labels; ++j) {  // raw: llav's softmax over the options cancels any constant
+                    const llama_token label = labels[j];
+                    out[j] = label >= 0 && label < n_vocab ? rows[k][label] : -1e30f;
+                }
+                out[n_labels] = normalizers[k];
+            }
         }
-        if (static_cast<int32_t>(rows.size()) != n_suffix) {
-            write_response(4, 0, {});
+        if (status != 0) {
+            fprintf(stderr, "llav-readout: suffix decode failed (%d)\n", status);
+            write_response(status == -1 ? 4 : 3, 0, {});
             continue;
         }
-        const std::vector<float> normalizers = log_normalizers(rows, n_vocab, args.threads);
-        std::vector<float> values;
-        values.reserve(static_cast<size_t>(n_suffix) * (n_labels + 1));
-        for (int32_t i = 0; i < n_suffix; ++i) {
-            for (llama_token label : labels) {  // raw: llav's softmax over the declared options cancels any constant
-                values.push_back(label >= 0 && label < n_vocab ? rows[i][label] : -1e30f);
-            }
-            values.push_back(normalizers[i]);
-        }
+        evaluated += n_suffix_tokens;
         write_response(0, evaluated, values);
     }
 
+    llama_batch_free(batch);
     llama_free(ctx);
     llama_model_free(model);
     llama_backend_free();

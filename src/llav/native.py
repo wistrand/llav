@@ -68,7 +68,7 @@ class NativeReadout:
     def _drain(self) -> None:
         for line in self.process.stderr:
             self._errors.append(line.decode(errors="replace").rstrip())
-            del self._errors[:-20]
+            del self._errors[:-60]  # room for a debugger backtrace after the line that says why
 
     def _read(self, count: int) -> bytes:
         try:
@@ -110,7 +110,9 @@ class NativeReadout:
             self.process.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
             pass
-        return " | ".join(self._errors[-3:]) or "no message on stderr"
+        # A crashing helper ends with a debugger backtrace; the line that says why comes before it.
+        causes = [line for line in self._errors if any(mark in line for mark in ("GGML_ASSERT", "error", "llav-readout:"))]
+        return " | ".join((causes or self._errors)[-3:]) or "no message on stderr"
 
     def kill(self) -> None:
         """Stop a helper llav no longer trusts, without waiting; `close` reaps it at shutdown."""
