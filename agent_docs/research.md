@@ -18,6 +18,7 @@ llama.cpp build 10809, Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `
 - Candidate mass
 - Labelled evaluation: calibration and option order
 - Temperature calibration
+- In the browser
 - Open questions
 
 ## Prompt fidelity and agreement
@@ -130,6 +131,15 @@ ticket, six questions. Both paths agree within 0.01.
   red at 0.79.
 - High mass does not mean a right answer: the 26-option question answered `O` at 0.999 mass, and the
   poem instruction was forced into a Yes/No answer without the mass dropping.
+- Matched pairs with the gold option removed (2026-09-26, Qwen3.5-4B, RTX PRO 4000, native helper,
+  `perturb.py nofit`, 1,400 choice questions from 7 sources, 200 each, asked as given and with the correct
+  option cut): candidate mass barely moves, median 0.9998 to 0.9991. Only 4.9% of the cut questions fall
+  below 0.9 (17.5% on AG News and 15.5% on DBpedia, where the remaining categories are clearly wrong; 0 to
+  1% on the intent, emotion, NLI and question-type sets), against 0.1% of the intact ones. The answer's
+  confidence drops more (median 0.979 to 0.796) but is no flag either. The model moves its mass to the
+  nearest remaining option; the header catches a question that has nothing to do with the text (the car
+  colour above), not a missing right answer among plausible ones. The README's wording should say which.
+  Results in `local/results/perturb/nofit.jsonl`.
 - One ticket, six questions: enough to show the header works and what a drop looks like, not to set a
   threshold. No threshold is known yet. The web UI flags an answer below 0.9 (`LOW_MASS` in
   `webui.html`) as "No option fits"; that value is a display cue chosen between the 0.999 of working
@@ -196,6 +206,11 @@ box the same day:
   differ by up to 0.09 between rotations of an identical prompt, from the helper's batched decode on CUDA
   (median 0.000); the answers do not.
 - The tables below were measured before the fix; their candidate-selection rows show the collision.
+
+The order question was then taken up as its own experiment, five models, 6,944 questions, random
+permutations as well as rotations, generated answers and human label distributions:
+[experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md) supersedes the `shifts`
+numbers below for every claim about order. Kept here as the first measurement.
 
 `shifts`, every cyclic rotation of each choice and score question's options (8,072 rotations, 445 s):
 
@@ -289,6 +304,42 @@ overconfident on every type.
   (Banking77 59% to 21%); that came from ranking the two halves together under different temperatures, and
   `fit` no longer reports it.
 
+## In the browser
+
+`docs/demo/` runs llav's prompt and readout in a web page: `llav.js` ports `prompt.py` and `questions.py`, and
+wllama 3.6.1 (llama.cpp compiled to WebAssembly, with its embedded llama-server) does the forward pass through
+`createChatCompletion` with `max_tokens: 1`, `temperature: -1`, `top_logprobs: 128` and thinking off. Checked
+on 2026-09-24 in headless Firefox 154 on the laptop, CPU only (headless Firefox has no WebGPU), Qwen3.5-2B
+Q8_0, the file `scripts/fetch-model.sh` pins for `qwen3.5-2b`.
+
+- Prompts: the port and `messages()` produced identical prompts for 8 questions in 2 requests covering all
+  three types, folded noul criteria, a structured state and instructions, non-ASCII text and letter-key
+  alignment. Both tokenized the README example's state and
+  choice to the same 135 tokens.
+- Agreement with the server (llama-server, no native helper, same model file) on `scripts/benchmark.py`'s
+  36 labelled questions: same answer on 35; right answers 31 for the server and 32 for the
+  browser; absolute probability difference median 0.0013, 90th percentile 0.024, max 0.106.
+- The differences are numeric, not the prompt: feeding the server's rendered prompt to wllama as raw text
+  gave the browser's numbers, and the server on CPU and on the GPU agreed with each other (0.534 on the one
+  near-tie that flipped). wllama's WebAssembly build computes the same model slightly differently (inferred:
+  its CPU kernels and their accumulation order differ from the native build's).
+- Speed, cross-origin isolated (multi-threaded, 8 to 16 threads): median 7.1 s per question; a 2 GB model
+  loads from the browser's cache in 4 s. Without isolation, as on GitHub Pages, which cannot send the
+  COOP/COEP headers: one thread, 46 s for a 146-token question. WebGPU speed is not measured.
+- Every question re-reads the state: `cache_prompt` is off, because a recurrent model cannot roll back a
+  partial prefix match (see [gotchas.md](gotchas.md)), and wllama exposes no slot save and restore.
+- Browser storage: a download that exceeds the site's storage quota is cut short without an error, and
+  wllama 3.6.1 loads the truncated file (llama.cpp then fails with "data is not within the file bounds" and
+  the first request aborts). `LlavBrowser.load` keeps one model cached and checks the size after the
+  download. Firefox counts the quota per site across ports, which is how a test on a second localhost port
+  hit it.
+- Q4_K_M, the page's default, against Q8_0 on the server (RTX PRO 4000, 2026-09-24, `evaluate.py score` over
+  the public samples, `authored144` and the two Jevals sets, 1,776 questions): accuracy 64.1% against 64.0%,
+  Brier 0.469 against 0.490, ECE 0.133 against 0.126; `benchmark.py accuracy` 32/36 against 31/36. The
+  smaller file costs no measurable accuracy here. Browser-to-server agreement on Q4_K_M is not measured.
+- Qwen3.5-4B does not fit: every quantization is over 2 GB, the largest single file wllama loads without
+  splitting.
+
 ## Open questions
 
 - Accuracy of llav's own wording against labelled data: measured on public samples and `authored144` (see
@@ -297,3 +348,8 @@ overconfident on every type.
   quantization: untested.
 - Names that collide with answer letters only inside the state ("Candidate A" with keys `first`, `second`):
   `_align_letters` does not cover them, and no labelled set tests them.
+- Order averaging and the flip warning as llav features (an `--orders` option, an `X-Llav-Order-Stable`
+  header): measured in [experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md)
+  and costed in [performance.md](performance.md), not built; `scripts/orders-proxy.py` is the research stand-in.
+- A stricter startup probe: Gemma 4 12B passes `_probe_labels` and then puts 2% of its mass on the letters
+  ([gotchas.md](gotchas.md)); a threshold on the labels' share of the mass would catch it, untested.

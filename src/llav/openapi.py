@@ -78,8 +78,9 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
                                     "Per question, in answer order, comma-separated: the probability the "
                                     "model gave the declared option letters over its whole vocabulary. "
                                     "Near 1 when it answered with an option; low when it wanted another "
-                                    "token, in which case the answer's probabilities are noise. Not a "
-                                    "measure of correctness."
+                                    "token, in which case the answer's probabilities are noise. It drops "
+                                    "when the question has nothing to do with the text, not when the right "
+                                    "answer is missing among plausible options. Not a measure of correctness."
                                 ),
                             },
                         },

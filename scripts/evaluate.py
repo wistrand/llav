@@ -49,6 +49,10 @@ uncalibrated unless each half has at least MIN_FIT questions and MIN_ERRORS wron
 temperature written was checked on held-out data; a temperature that ends at the search limit is refused.
 Fit on the workload the thresholds will run on: calibration measured here differs by task.
 
+The fetched sources: BoolQ, AG News, DBpedia, Banking77's 13 card intents, Yelp stars, the two Jevals tasks,
+and, added for the option-order experiment, full Banking77 and CLINC150 as 12-option choices among the gold
+intent's nearest neighbours by name, TREC fine question types within their coarse group, MNLI, a 12-emotion
+GoEmotions subset, and ChaosNLI's 1,599 MNLI items with their 100 human labels in a `human` field.
 Sources are samples of public datasets, taken evenly across each split so class-sorted splits are covered.
 They are downloaded for local evaluation only; their licences differ and none are redistributed here.
 Results go in agent_docs/research.md (llav) and agent_docs/comparisons.md (other models and systems).
@@ -62,6 +66,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import statistics
 import sys
 import time
@@ -98,6 +103,15 @@ CARD_INTENTS = ["activate_my_card", "card_about_to_expire", "card_acceptance", "
                 "card_payment_not_recognised", "card_payment_wrong_exchange_rate", "card_swallowed",
                 "compromised_card", "lost_or_stolen_card"]
 STARS = ["1 star", "2 stars", "3 stars", "4 stars", "5 stars"]
+# Full Banking77 and CLINC150 have 77 and 150 intents; each question offers this many, the gold one and the
+# closest by name (_confusable).
+INTENT_OPTIONS = 12
+MNLI = {"entailment": "The premise shows the hypothesis is true",
+        "neutral": "The premise neither confirms nor contradicts the hypothesis",
+        "contradiction": "The premise shows the hypothesis is false"}
+# A GoEmotions subset whose emotions overlap (anger, annoyance, disapproval; joy, amusement, love).
+EMOTIONS = ["admiration", "amusement", "anger", "annoyance", "approval", "curiosity", "disapproval",
+            "gratitude", "joy", "love", "sadness", "neutral"]
 MAX_STATE_CHARS = 2000
 MIN_FIT = 30
 # With every answer right, NLL keeps falling as T shrinks and the fit runs to its limit, calling every answer
@@ -260,8 +274,115 @@ def fetch_jevals(bench: str) -> list[dict]:
     return items
 
 
+def _confusable(gold: str, names: list[str], count: int, rng: random.Random) -> list[str]:
+    """`gold` and the `count` - 1 names sharing the most underscore-separated words with it, in a seeded
+    random order: intent names that share words ("card_arrival", "card_delivery_estimate") are the ones a
+    model confuses."""
+    words = set(gold.split("_"))
+    others = [name for name in names if name != gold]
+    rng.shuffle(others)  # breaks ties between equally close names
+    others.sort(key=lambda name: -len(words & set(name.split("_"))) / len(words | set(name.split("_"))))
+    options = [gold] + others[:count - 1]
+    rng.shuffle(options)
+    return options
+
+
+def _intents(source: str, dataset: str, config: str, label: str, rows: int, skip: set[str]) -> list[dict]:
+    """An intent dataset as choices of INTENT_OPTIONS confusable intents each, the gold one among them."""
+    # Test splits are sorted by intent with a few dozen rows each: many small pages, or whole intents are missed.
+    sample = _spread(dataset, config, "test", rows, max(20, rows // 10))
+    names = _get_json(f"{ROWS_API}?" + urllib.parse.urlencode({
+        "dataset": dataset, "config": config, "split": "test", "offset": 0, "length": 1,
+    }))["features"]
+    names = next(f for f in names if f["name"] == label)["type"]["names"]
+    items = []
+    for row in sample:
+        gold = names[row[label]]
+        if gold in skip:
+            continue
+        rng = random.Random(f"{source}:{len(items)}")
+        options = _confusable(gold, [name for name in names if name not in skip], INTENT_OPTIONS, rng)
+        question = {"type": "choice", "instructions": "What does the customer need help with?",
+                    "criteria": {name: None for name in options}}
+        items.append(_item(source, len(items), row["text"], question, gold))
+    return items
+
+
+def fetch_banking77(rows: int) -> list[dict]:
+    return _intents("banking77", "legacy-datasets/banking77", "default", "label", rows, set())
+
+
+def fetch_clinc150(rows: int) -> list[dict]:
+    # "oos" marks queries no intent fits; they belong in a no-fit set, not a choice with a right answer.
+    return _intents("clinc150", "clinc/clinc_oos", "plus", "intent", rows, {"oos"})
+
+
+def fetch_trec_fine(rows: int) -> list[dict]:
+    """TREC question types: the fine types within the gold one's coarse group (13 numeric types, 22 entity
+    types, ...), which differ by little."""
+    sample = _everything("SetFit/TREC-QC", "default", "test")
+    groups: dict[str, list[str]] = {}
+    for row in sample:
+        group = groups.setdefault(row["label_coarse_original"], [])
+        if row["label_text"] not in group:
+            group.append(row["label_text"])
+    items = []
+    for row in sample[:rows]:
+        options = sorted(groups[row["label_coarse_original"]])
+        if len(options) < 2:
+            continue
+        question = {"type": "choice", "instructions": "What kind of answer does this question ask for?",
+                    "criteria": {name: None for name in options}}
+        items.append(_item("trec_fine", len(items), row["text"], question, row["label_text"]))
+    return items
+
+
+def fetch_mnli(rows: int) -> list[dict]:
+    names = list(MNLI)
+    question = {"type": "choice", "instructions": "How does the hypothesis relate to the premise?", "criteria": MNLI}
+    return [_item("mnli", index, f"Premise: {row['premise']}\nHypothesis: {row['hypothesis']}", question,
+                  names[row["label"]])
+            for index, row in enumerate(_spread("nyu-mll/glue", "mnli", "validation_matched", rows, 20))
+            if row["label"] in (0, 1, 2)]
+
+
+def fetch_goemotions(rows: int) -> list[dict]:
+    names = _get_json(f"{ROWS_API}?" + urllib.parse.urlencode({
+        "dataset": "google-research-datasets/go_emotions", "config": "simplified", "split": "test",
+        "offset": 0, "length": 1,
+    }))["features"]
+    names = next(f for f in names if f["name"] == "labels")["type"]["feature"]["names"]
+    question = {"type": "choice", "instructions": "Which emotion does this comment express most?",
+                "criteria": {emotion: None for emotion in EMOTIONS}}
+    items = []
+    for row in _everything("google-research-datasets/go_emotions", "simplified", "test"):
+        labels = [names[index] for index in row["labels"]]
+        if len(labels) == 1 and labels[0] in EMOTIONS:
+            items.append(_item("goemotions", len(items), row["text"], question, labels[0]))
+    step = max(1, len(items) // rows)  # evenly across the split, so no emotion is cut off
+    return [{**item, "id": f"goemotions-{index}"} for index, item in enumerate(items[::step][:rows])]
+
+
+def fetch_chaos_mnli(rows: int) -> list[dict]:
+    """ChaosNLI's 1,599 MNLI dev items (Nie et al., 2020), each with 100 human labels, from the tasksource
+    mirror. The label is the 100-annotator majority; `human` keeps the counts, so an item's ambiguity is
+    measured rather than judged. `rows` is ignored: the set is small and the point is its completeness."""
+    names = {"e": "entailment", "n": "neutral", "c": "contradiction"}
+    question = {"type": "choice", "instructions": "How does the hypothesis relate to the premise?", "criteria": MNLI}
+    items = []
+    for row in _everything("tasksource/chaos-mnli-ambiguity", "default", "train"):
+        counts = dict(zip(names.values(), row["label_count"]))  # ChaosNLI's order: e, n, c
+        item = _item("chaos_mnli", len(items), f"Premise: {row['premise']}\nHypothesis: {row['hypothesis']}",
+                     question, names[row["majority_label"]])
+        item["human"] = {"counts": counts, "original": names[row["old_label"]]}
+        items.append(item)
+    return items
+
+
 FETCHERS = {"boolq": fetch_boolq, "ag_news": fetch_ag_news, "dbpedia": fetch_dbpedia,
             "banking_cards": fetch_banking_cards, "yelp_stars": fetch_yelp,
+            "banking77": fetch_banking77, "clinc150": fetch_clinc150, "trec_fine": fetch_trec_fine,
+            "mnli": fetch_mnli, "goemotions": fetch_goemotions, "chaos_mnli": fetch_chaos_mnli,
             "jevals_pubmedqa": lambda rows: fetch_jevals("pubmedqa"),
             "jevals_helpsteer2": lambda rows: fetch_jevals("helpsteer2")}
 

@@ -277,7 +277,7 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
   <p>llav runs an open model through <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> on your own
     machine. The default is <a href="https://huggingface.co/Qwen/Qwen3.5-4B">Qwen3.5-4B</a>, but it is not the only
     choice: any GGUF chat model can be tried, llav checks at startup that it answers with option letters, and five
-    alternatives are pinned for download, from Qwen3.5-2B to Meta's Muse Glimmer 30B.</p>
+    alternatives are pinned for download, from Qwen3.5-2B and Google's Gemma 4 E4B to Meta's Muse Glimmer 30B.</p>
   <p>Its HTTP API has the same shape as TypeSafe's System One API (<code>POST /v1/systemone</code>), so code
     written for their Jev model can call llav instead. The question types keep TypeSafe's names:
     <code>noul</code> (yes/no), <code>choice</code> (pick one option) and <code>score</code> (a level on a scale).</p>
@@ -391,7 +391,8 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
 <pre><code>git clone https://github.com/wistrand/llav.git && cd llav
 scripts/fetch-model.sh ~/models</code></pre>
       Pass <code>qwen3.5-2b</code>, <code>granite-4.0-h-tiny</code>, <code>granite-4.2-3b</code>,
-      <code>smollm3-3b</code> or <code>muse-glimmer-30b</code> as a second argument for an alternative.</li>
+      <code>smollm3-3b</code>, <code>gemma-4-e4b</code> or <code>muse-glimmer-30b</code> as a second argument for an
+      alternative.</li>
     <li><b>Serve.</b> Nothing needs installing:
 <pre><code>PYTHONPATH=src python3 -m llav --gguf ~/models/Qwen_Qwen3.5-4B-Q8_0.gguf --port 8080 --web-ui</code></pre>
       <code>--web-ui</code> serves a page at <code>http://localhost:8080/</code> for trying questions in a browser.

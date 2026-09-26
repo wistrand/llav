@@ -40,7 +40,8 @@ with it.
 The helper loads the model itself, so it needs `--gguf`, not `--llama-url`, and it holds a second copy of
 the weights in memory alongside llama-server's. For Qwen3.5-4B that is about 5 GB more; Muse Glimmer 30B
 (16.8 GB) with the helper does not fit a 24 GB GPU. `--native-questions N` sets how many questions it takes in
-one pass (default 16); a request with more goes to llama-server. `GET /v1/models` reports
+one pass (default 16); a request with more goes to llama-server. The helper decodes the prefix and the
+suffixes in chunks of its batch size, so a long state or many long suffixes do not exceed it. `GET /v1/models` reports
 `backend.prefix_reuse: native` while it is in use.
 
 ## Notes

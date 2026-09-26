@@ -17,6 +17,7 @@ llama.cpp build 10809, Qwen3.5-4B Q8_0 GGUF (bartowski, the revision pinned in `
 - Against generating text
 - Expected scaling on other hardware
 - The normalizer's cost in the native helper
+- Asking a question in several orders
 - Open questions
 
 ## Reusing a shared state
@@ -310,6 +311,31 @@ pass cost about 19 ms per question there, far more than the 1.5 ms the same loop
 in a microbenchmark (why is not investigated; the logits buffer's memory is the suspect). The current
 helper uses a polynomial exp (at most 5e-6 relative error) that the compiler vectorizes and splits the
 vocabulary across `--threads`: 124 ms, 2 ms above not computing it at all.
+
+## Asking a question in several orders
+
+Measured 2026-09-26 on an RTX PRO 4000 Blackwell, Qwen3.5-4B Q8_0: one 1,800-token state, one 7-option choice
+with described options, asked in K orders through `scripts/orders-proxy.py` (all orders in one request).
+"Repeat" is the median of 8 requests with the state already cached, the per-question cost; "first" reads
+the state. Script and raw numbers: `agent_docs/experiments/scripts/orders-timing.py`,
+`local/results/perturb/orders-timing.json`.
+
+| Orders K | Helper, first | Helper, repeat | llama-server, first | llama-server, repeat |
+|---------:|--------------:|---------------:|--------------------:|---------------------:|
+|        1 |       0.30 s |        0.046 s |             0.31 s |              0.062 s |
+|        2 |       0.32 s |        0.069 s |             0.36 s |              0.110 s |
+|        4 |       0.38 s |        0.121 s |             0.21 s |              0.208 s |
+|        7 |       0.44 s |        0.192 s |             0.60 s |              0.354 s |
+|       14 |       0.67 s |        0.420 s |             0.95 s |              0.697 s |
+
+- The cost is close to linear in K on both paths: about 27 ms per extra order through the helper and 48 ms
+  through llama-server, for a suffix of about 150 tokens (7 described options). The helper's batching
+  removes the per-pass overhead, not the decode of each suffix.
+- Reading the state dominates the first request (0.30 s); the orders add to it the same way.
+- On JevBench's short questions (3 to 5 options), 4 orders cost 30 to 60 ms per decision
+  ([comparisons.md](comparisons.md)). The gain those orders buy is in
+  [experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md): 8% fewer errors on this
+  model, 17 to 22% on the smaller pinned ones.
 
 ## Open questions
 

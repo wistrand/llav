@@ -2,12 +2,13 @@ Guidance for agents working in this repo. Read this first, then the relevant fil
 
 ## What this is
 
-llav is an HTTP server that answers typed decision questions (`noul`, `choice`, `score`) about a caller's
-`state`, using a local GGUF model through `llama-server`. Its API follows the public shape of TypeSafe's
-System One API (`POST /v1/systemone`). Each question is one forward pass. llav reads the next-token
-log-probabilities of the answer letters `A`–`Z` and softmaxes them over the declared options; it never
-generates text. When a request asks several questions about one state, llav evaluates the state prefix
-once and reuses it for every question; evaluated states are cached as slot files for later requests.
+llav (Large Language Verdicts, pronounced "lahv") is an HTTP server that answers typed decision questions
+(`noul`, `choice`, `score`) about a caller's `state`, using a local GGUF model through `llama-server`. Its API
+follows the public shape of TypeSafe's System One API (`POST /v1/systemone`). Each question is one forward
+pass. llav reads the next-token log-probabilities of the answer letters `A`–`Z` and softmaxes them over the
+declared options; it never generates text. When a request asks several questions about one state, llav
+evaluates the state prefix once and reuses it for every question; evaluated states are cached as slot files
+for later requests.
 
 ```
 client ──HTTP──> server.py ──> questions.py (validate, build answers)
@@ -37,10 +38,14 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
 | `scripts/benchmark.py`     | `accuracy`, `timing`, `articles`, `fetch`, `phases` against a llav     |
 | `scripts/evaluate.py`      | Labelled data: accuracy, Brier, ECE, coverage; option-order `shifts`   |
+| `scripts/perturb.py`       | Experiment: does disagreement across option orders predict errors?     |
+| `scripts/orders-proxy.py`  | Research proxy: asks llav in several option orders and averages        |
 | `scripts/fetch-model.sh`   | Downloads a pinned GGUF (Qwen3.5-4B default) and checks SHA-256        |
 | `scripts/remote-gpu.sh`    | Starts llav on a rented CUDA box over SSH; NATIVE=1, TS_AUTHKEY=...    |
 | `agent_docs/`              | Deep dives, linked below                                               |
 | `docs/`                    | GitHub Pages site (`index.html`) and README screenshots                |
+| `docs/demo/`               | Browser demo: `llav.js` ports `prompt.py` and `questions.py` to wllama |
+| `local/`                   | Gitignored: fetched data, run outputs, one-off scripts the experiment docs cite |
 
 ## Commands
 
@@ -51,6 +56,7 @@ python3 -m unittest discover -s tests                    # unit tests
 scripts/fetch-model.sh DIR [MODEL]                       # get a pinned model (default qwen3.5-4b)
 scripts/benchmark.py timing http://127.0.0.1:8080        # also accuracy, articles, phases
 scripts/evaluate.py score http://127.0.0.1:8080 DIR      # after `evaluate.py fetch DIR`; also shifts, fit
+scripts/perturb.py run http://127.0.0.1:8080 DIR --out R.jsonl   # order-permutation experiment; then analyze, h2
 ```
 
 Runtime requirement: `llama-server` from llama.cpp on `PATH`, or passed with `--llama-server`. The README's
@@ -70,12 +76,25 @@ Quick start lists install options per platform; `native/README.md` covers the op
   native helper, timings per machine, scaling estimates. Read before changing anything on the hot path.
 - [agent_docs/comparisons.md](agent_docs/comparisons.md): other models under llav (screening, Muse Glimmer)
   and other System One systems (CLM, Laya, von) on the same labelled questions.
+- [agent_docs/experiments/permutation-uncertainty.md](agent_docs/experiments/permutation-uncertainty.md):
+  the running experiment on permutation disagreement as an error signal: hypotheses, design, results so far.
+- [agent_docs/experiments/related-work.md](agent_docs/experiments/related-work.md): prior work on option
+  order, first-token readout, calibration, consistency as uncertainty and human label variation, and what
+  the experiment adds.
+- [agent_docs/experiments/paper-outline.md](agent_docs/experiments/paper-outline.md): the paper drafted
+  from the experiment: sections, every figure and table with its data file, and the arms still to run.
+- [agent_docs/experiments/noul-framing.md](agent_docs/experiments/noul-framing.md): plan to measure how a
+  noul should be framed (the criteria fold against a yes/no choice), triggered by JevBench's public nouls.
 - [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps, plus the readout,
   native-helper and calibration traps. Skim before touching llama-server flags, the readout, option
   handling, the helper, or calibration.
 
 ## Invariants
 
+- llav's point is ease of install and reuse of existing models: any chat GGUF through llama.cpp, a fixed
+  prompt, no weights of its own, no fine-tuning. Never tune it toward a benchmark; measurements on JevBench
+  or the Decision Index are for orientation, not targets. Improvements that count are fewer install steps,
+  more models working unchanged, and correctness on caller-style data.
 - Never add a third-party Python dependency. llav is standard library only. The runtime is `llama-server`;
   the `llav-readout` helper in `native/` is optional, opt-in with `--native-readout`, and every path must
   still work without it.
@@ -120,6 +139,9 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - `docs/index.html` is the project's GitHub Pages site and repeats the README's quick start, options and
   headline results. When those change, update it in the same change; retake the screenshots in `docs/` when
   the web UI changes.
+- `docs/demo/llav.js` is a JavaScript port of `prompt.py` and `questions.py` for the browser demo. When the
+  prompt, the question mapping or the answer shape changes, change the port in the same change; its prompts
+  must stay byte-identical to `messages()`.
 - The API is described once, in `openapi.py`. When routes, question types, limits or statuses change, update
   it and run `PYTHONPATH=src python3 scripts/write-openapi.py`; a test fails while `openapi.json` is stale.
 

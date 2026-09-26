@@ -1,0 +1,17 @@
+{
+  "ag_news": ["Which category best describes this news story?", "What subject does this article cover?",
+              "Under which section would this news item be filed?"],
+  "banking77": ["What is the customer asking about?", "Which issue is the customer raising?", "What is this request about?"],
+  "banking_cards": ["What is the customer asking about?", "Which issue is the customer raising?", "What is this request about?"],
+  "clinc150": ["What is the customer asking about?", "Which issue is the customer raising?", "What is this request about?"],
+  "dbpedia": ["Which category does the subject of this text belong to?", "What type of entity is described here?",
+              "What sort of thing is this passage describing?"],
+  "goemotions": ["What is the main emotion in this comment?", "Which feeling does the writer of this comment mostly convey?",
+                 "What emotion comes through most strongly in this comment?"],
+  "mnli": ["Given the premise, what is the status of the hypothesis?",
+           "What is the logical relation between the premise and the hypothesis?",
+           "Does the premise support, contradict, or say nothing about the hypothesis?"],
+  "trec_fine": ["What type of thing is this question looking for?",
+                "Which category describes the expected answer to this question?",
+                "What sort of answer would satisfy this question?"]
+}
