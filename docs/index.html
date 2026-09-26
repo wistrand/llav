@@ -54,6 +54,7 @@ header.hero { padding: 3rem 0 1rem; }
 .hero-art .scale { stroke: var(--axis); stroke-width: 2; stroke-linecap: round; }
 .hero-art .dot { fill: var(--s1); stroke: var(--panel); stroke-width: 3; }
 header.hero h1 { font-size: 2.4rem; margin: 0 0 0.3rem; letter-spacing: -0.02em; }
+header.hero p.tagline { font-size: 0.95rem; color: var(--muted); margin: 0 0 0.6rem; letter-spacing: 0.01em; }
 header.hero p.lead { font-size: 1.2rem; color: var(--muted); margin: 0 0 1.5rem; max-width: 42rem; }
 .example { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.2rem;
   font-family: var(--mono); font-size: 0.9rem; display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; }
@@ -195,6 +196,7 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
     <a href="#results">Results</a>
     <a href="#speed">Speed</a>
     <a href="#options">Options</a>
+    <a href="demo/">Try in the browser</a>
     <a href="https://github.com/wistrand/llav">GitHub</a>
   </div>
 </nav>
@@ -205,10 +207,12 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
   <div class="hero-grid">
     <div>
       <h1>llav</h1>
+      <p class="tagline">Large Language Verdicts, pronounced "lahv"</p>
       <p class="lead">Ask a local language model yes/no, multiple-choice and rating questions about a piece of
         text, and get probabilities back instead of generated text.</p>
       <div class="buttons">
         <a class="button primary" href="#start">Get started</a>
+        <a class="button" href="demo/">Try it in the browser</a>
         <a class="button" href="https://github.com/wistrand/llav">Source on GitHub</a>
       </div>
     </div>

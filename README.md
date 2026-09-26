@@ -11,8 +11,8 @@
 ╰───────────────────────────╯
 ```
 
-Ask a local language model yes/no, multiple-choice and rating questions about a piece of text, and get
-probabilities back instead of generated text:
+llav, Large Language Verdicts, pronounced "lahv". Ask a local language model yes/no, multiple-choice and
+rating questions about a piece of text, and get probabilities back instead of generated text:
 
 ```
 text:      "Help! My payouts have been failing for 3 days."
@@ -42,7 +42,9 @@ The HTTP API has the same shape as TypeSafe's System One API (`POST /v1/systemon
 Jev model can call llav instead. The question types keep TypeSafe's names: `noul` (yes/no), `choice` (pick
 one option) and `score` (a level on a scale).
 
-Website: [wistrand.github.io/llav](https://wistrand.github.io/llav/).
+Website: [wistrand.github.io/llav](https://wistrand.github.io/llav/). To try llav without installing anything,
+the [browser demo](https://wistrand.github.io/llav/demo/) runs the same prompt and readout on Qwen3.5-2B inside the
+page, through llama.cpp compiled to WebAssembly; it downloads 1.4 GB once and is slower than the server.
 
 *Independent project; not affiliated with or endorsed by TypeSafe. Jev and TypeSafe are the property of
 their respective owners. llav reproduces the public request/response shape, not Jev's model.*

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llav in the browser</title>
+<meta name="description" content="Try llav in the browser: typed yes/no, choice and rating questions about a text, answered with probabilities by a small model running locally through llama.cpp compiled to WebAssembly.">
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1f23; --muted: #626a75; --line: #e1e3e6;
+  --accent: #2b62c9; --accent-soft: #e6eefb; --code-bg: #f0f1f3; --good: #1b7f4b; --bad: #b3372c;
+  --s1: #2a78d6; --deemph: #c3c2b7; --grid: #e8e8e4; --ink3: #898781;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121418; --panel: #1a1d22; --text: #e4e6e9; --muted: #9aa2ad; --line: #2c3037;
+    --accent: #79a6f2; --accent-soft: #1f2d45; --code-bg: #20242a; --good: #4cc584; --bad: #f08b80;
+    --s1: #3987e5; --deemph: #4a4b48; --grid: #26282b; --ink3: #8a8d93;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 var(--sans); }
+a { color: var(--accent); }
+code, pre, textarea { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow-x: auto; line-height: 1.45; margin: 0.5rem 0; }
+nav { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line); }
+nav .inner { max-width: 60rem; margin: 0 auto; padding: 0.6rem 1rem; display: flex; gap: 1.1rem; align-items: center;
+  overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+nav .brand { font-weight: 700; color: var(--text); text-decoration: none; margin-right: 0.4rem; }
+nav a { text-decoration: none; font-size: 0.93rem; }
+main { max-width: 60rem; margin: 0 auto; padding: 0 1rem 4rem; }
+header { padding: 2.5rem 0 0.5rem; }
+h1 { font-size: 2.2rem; margin: 0 0 0.3rem; letter-spacing: -0.02em; }
+h2 { font-size: 1.35rem; margin: 0 0 0.7rem; letter-spacing: -0.01em; }
+p { margin: 0 0 1rem; }
+.lead { font-size: 1.15rem; color: var(--muted); max-width: 44rem; }
+.note { font-size: 0.9rem; color: var(--muted); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 0.8rem; margin: 1.2rem 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; }
+.card b { display: block; margin-bottom: 0.25rem; }
+.card p { margin: 0; color: var(--muted); font-size: 0.93rem; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1.2rem; margin: 1.2rem 0; }
+.row { display: flex; gap: 0.7rem; flex-wrap: wrap; align-items: center; }
+label.field { display: block; font-weight: 600; font-size: 0.92rem; margin: 0.9rem 0 0.3rem; }
+label.field span { font-weight: 400; color: var(--muted); }
+select, textarea, button { font: inherit; color: var(--text); }
+select { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.6rem; max-width: 100%; }
+textarea { width: 100%; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem;
+  line-height: 1.45; resize: vertical; }
+textarea#questions { font-family: var(--mono); font-size: 0.86rem; }
+textarea#state { font-size: 0.95rem; }
+button { padding: 0.5rem 1rem; border-radius: 8px; font-weight: 600; border: 1px solid var(--line); background: var(--panel);
+  cursor: pointer; }
+button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.chip { padding: 0.25rem 0.7rem; font-weight: 500; font-size: 0.88rem; border-radius: 999px; }
+.progress { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; flex: 1 1 12rem; }
+.progress i { display: block; height: 100%; width: 0; background: var(--s1); transition: width 0.2s; }
+.progress.busy i { width: 30% !important; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .progress.busy i { animation: none; width: 100% !important; opacity: 0.5; } }
+.status { font-size: 0.9rem; color: var(--muted); margin: 0.6rem 0 0; }
+.status .t { font-variant-numeric: tabular-nums; }
+.status.bad, .error { color: var(--bad); }
+.error { font-size: 0.92rem; margin: 0.6rem 0 0; white-space: pre-wrap; }
+.answers { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0.8rem; margin: 1rem 0; }
+.answer { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; }
+.answer.pending { color: var(--muted); }
+.answer .head { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
+.answer .key { font-family: var(--mono); font-weight: 700; overflow-wrap: anywhere; }
+.answer .kind { font-family: var(--mono); font-size: 0.78rem; color: var(--accent); }
+.answer .verdict { font-size: 1.25rem; font-weight: 650; margin: 0.2rem 0 0.6rem; overflow-wrap: anywhere; }
+.bars { display: grid; grid-template-columns: minmax(3rem, max-content) 1fr 3.2rem; gap: 0.3rem 0.6rem; align-items: center;
+  font-size: 0.86rem; }
+.bars .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 11rem; }
+.bars .track { height: 10px; background: var(--grid); border-radius: 0 4px 4px 0; }
+.bars .track i { display: block; height: 100%; background: var(--deemph); border-radius: 0 4px 4px 0; }
+.bars .track i.top { background: var(--s1); }
+.bars .v { text-align: right; font-variant-numeric: tabular-nums; }
+.answer .meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.7rem; }
+.answer .meta .low { color: var(--bad); font-weight: 600; }
+details { margin: 0.8rem 0; }
+summary { cursor: pointer; color: var(--accent); font-size: 0.93rem; }
+ul { padding-left: 1.3rem; }
+li { margin-bottom: 0.4rem; }
+footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<nav aria-label="Site">
+  <div class="inner">
+    <a class="brand" href="../">llav</a>
+    <a href="#try">Try it</a>
+    <a href="#differences">Differences from the server</a>
+    <a href="https://github.com/wistrand/llav">GitHub</a>
+  </div>
+</nav>
+
+<main>
+<header>
+  <h1>llav in the browser</h1>
+  <p class="lead">Ask yes/no, choice and rating questions about a text and get probabilities back, with the model
+    running on your own machine. The page uses llav's prompt and readout on llama.cpp compiled to WebAssembly
+    (<a href="https://github.com/ngxson/wllama">wllama</a>).</p>
+</header>
+
+<div class="cards">
+  <div class="card"><b>Runs locally</b><p>The model and the questions stay in this tab. Nothing you type is sent
+    anywhere.</p></div>
+  <div class="card"><b>A 1.4 or 2.1 GB download, once</b><p>The browser keeps the last model loaded, so later
+    visits read it from disk.</p></div>
+  <div class="card"><b>WebGPU helps</b><p>Without it the model runs on one CPU thread and a question takes tens
+    of seconds.</p></div>
+</div>
+
+<section id="try">
+<div class="panel">
+  <h2>1. Load a model</h2>
+  <div class="row">
+    <select id="model" aria-label="Model"></select>
+    <button id="load" class="primary">Load</button>
+    <div class="progress" id="progress" aria-hidden="true"><i id="bar"></i></div>
+  </div>
+  <p class="status" id="load-status" role="status"></p>
+</div>
+
+<div class="panel">
+  <h2>2. Ask</h2>
+  <div class="row" role="group" aria-label="Examples">
+    <span class="note">Examples:</span>
+    <button class="chip" data-example="support">Support ticket</button>
+    <button class="chip" data-example="review">Product review</button>
+    <button class="chip" data-example="moderation">Moderation</button>
+    <button class="chip" data-example="nofit">No option fits</button>
+  </div>
+  <label class="field" for="state">State <span>(the text the questions are about)</span></label>
+  <textarea id="state" rows="3"></textarea>
+  <label class="field" for="questions">Questions <span>(System One JSON, keyed by name)</span></label>
+  <textarea id="questions" rows="14" spellcheck="false"></textarea>
+  <div class="row" style="margin-top:0.8rem">
+    <button id="ask" class="primary" disabled>Ask</button>
+    <span class="note" id="ask-status">Load a model first.</span>
+  </div>
+  <p class="error" id="error" hidden></p>
+  <div class="answers" id="answers"></div>
+  <details id="raw" hidden>
+    <summary>Request and response JSON</summary>
+    <pre id="raw-request"></pre>
+    <pre id="raw-response"></pre>
+  </details>
+</div>
+</section>
+
+<section id="differences">
+  <h2>Differences from the server</h2>
+  <ul>
+    <li>The model is Qwen3.5-2B, not the server's default Qwen3.5-4B: every 4B quantization is over 2 GB,
+      the largest single file wllama loads. The Q8_0 file is the same one <code>scripts/fetch-model.sh</code>
+      pins for <code>qwen3.5-2b</code>.</li>
+    <li>Each question reads the whole text again. The server reads a shared state once and reuses it for every
+      question.</li>
+    <li>GitHub Pages cannot send the headers that allow WebAssembly threads, so without WebGPU the model runs on a
+      single CPU thread.</li>
+    <li>The prompt is byte-identical to the server's. The numbers come from a different llama.cpp build, so a
+      near-tie can land the other way. On 36 labelled questions with Q8_0, the page and the server chose the same
+      answer 35 times; the median probability difference was 0.001 and the largest 0.11.</li>
+    <li>The candidate mass is summed over the model's 128 most likely next tokens. It flags a question none of the
+      options fit, as on the server.</li>
+    <li>The text stays in the tab, but the page runs wllama from the jsDelivr CDN, pinned to one version; that
+      code is trusted the way any CDN script is. A state longer than the 4,096-token context fails with
+      llama.cpp's own error.</li>
+  </ul>
+  <p>To run llav as an HTTP API on your own machine, see the <a href="../#start">quick start</a>.</p>
+</section>
+</main>
+
+<footer>
+  llav · MIT licence · <a href="https://github.com/wistrand/llav">github.com/wistrand/llav</a> ·
+  runs on <a href="https://github.com/ngxson/wllama">wllama</a> and
+  <a href="https://huggingface.co/Qwen">Qwen</a> models
+</footer>
+
+<script type="module">
+import { LlavBrowser, ValidationError } from "./llav.js";
+
+const HF = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/7d26695454df6de5fbcce2e58681e62dae06ce43";
+const MODELS = [
+  { id: "llav-Qwen_Qwen3.5-2B-Q4_K_M", label: "Qwen3.5-2B Q4_K_M (1.4 GB)", url: `${HF}/Qwen_Qwen3.5-2B-Q4_K_M.gguf` },
+  { id: "llav-Qwen_Qwen3.5-2B-Q8_0", label: "Qwen3.5-2B Q8_0 (2.1 GB, the file compared with the server)", url: `${HF}/Qwen_Qwen3.5-2B-Q8_0.gguf` },
+];
+// ?model=URL loads another GGUF, for a mirror or a local copy. Files over 2 GB must be split.
+const custom = new URLSearchParams(location.search).get("model");
+if (custom) {
+  const stem = custom.split("/").pop().replace(/\.gguf$/, "");
+  MODELS.unshift({ id: `llav-${stem}`, label: `${stem} (from the page URL)`, url: new URL(custom, location.href).href });
+}
+
+// The web UI's examples (src/llav/webui.html), as System One requests.
+const EXAMPLES = {
+  support: {
+    state: "Help! My payouts have been failing for 3 days.",
+    questions: {
+      frustration: { type: "score", instructions: "How frustrated is the customer?", criteria: ["Calm", "Frustrated", "Very angry"] },
+      department: { type: "choice", instructions: "Which team should handle this?",
+        criteria: { billing: "Payments, invoicing, refunds", technical: "Bugs, outages, integrations", sales: "Pricing, upgrades, new accounts" } },
+    },
+  },
+  review: {
+    state: "The battery lasts two days and the screen is gorgeous, but it arrived with a scratch and support never answered my email.",
+    questions: {
+      recommends: { type: "noul", instructions: "Would the reviewer recommend the product?" },
+      complaint: { type: "choice", instructions: "What is the main complaint?",
+        criteria: { quality: "The product itself is faulty or poor", shipping: "Delivery, packaging or damage in transit",
+          support: "Customer service", price: "Too expensive" } },
+      sentiment: { type: "score", instructions: "What is the overall sentiment?",
+        criteria: ["Very negative", "Negative", "Mixed", "Positive", "Very positive"] },
+    },
+  },
+  moderation: {
+    state: "You clearly didn't read the article. Everyone in this thread already explained why you're wrong.",
+    questions: {
+      personal_attack: { type: "noul", instructions: "Is this a personal attack?",
+        criteria: { true: "It insults or demeans a person", false: "It criticizes arguments or ideas" } },
+      action: { type: "choice", instructions: "What should a moderator do?",
+        criteria: { allow: "Fine as it is", warn: "Remind the author of the rules", remove: "Take the comment down" } },
+      hostility: { type: "score", instructions: "How hostile is the tone?", criteria: ["Friendly", "Neutral", "Rude", "Abusive"] },
+    },
+  },
+  nofit: {
+    state: "Help! My payouts have been failing for 3 days.",
+    questions: {
+      car_colour: { type: "choice", instructions: "What colour is the customer's car?", criteria: { red: null, blue: null } },
+      department: { type: "choice", instructions: "Which team should handle this?",
+        criteria: { billing: "Payments, invoicing, refunds", technical: "Bugs, outages, integrations", sales: "Pricing, upgrades, new accounts" } },
+    },
+  },
+};
+// Below this candidate mass the options likely do not fit; the server's default profile uses the same cue.
+const LOW_MASS = 0.9;
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const fmt = (p) => p.toFixed(3);
+
+const llav = new LlavBrowser();
+let loaded = null;
+let busy = false;
+
+for (const [i, m] of MODELS.entries()) { const o = el("option", null, m.label); o.value = i; $("model").append(o); }
+$("load-status").textContent = LlavBrowser.webgpu()
+  ? "This browser reports WebGPU."
+  : "This browser has no WebGPU, so the model runs on the CPU. Expect tens of seconds per question.";
+
+function fill(name) {
+  const ex = EXAMPLES[name];
+  $("state").value = ex.state;
+  $("questions").value = JSON.stringify(ex.questions, null, 2);
+}
+document.querySelectorAll("[data-example]").forEach((b) => b.addEventListener("click", () => fill(b.dataset.example)));
+fill("support");
+
+function setBusy(on) {
+  busy = on;
+  $("load").disabled = on;
+  $("model").disabled = on;
+  $("ask").disabled = on || !loaded;
+}
+
+const STEPS = [
+  [/^(llama_model_loader|print_info|load):/, "Reading the file header and vocabulary..."],
+  [/^load_tensors:/, "Loading the weights..."],
+  [/^(llama_context|llama_kv_cache|llama_memory|sched_reserve):/, "Setting up the model..."],
+];
+const seconds = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, "0")} s`);
+const gb = (n) => (n / 1e9).toFixed(2);
+
+$("load").addEventListener("click", async () => {
+  const model = MODELS[$("model").value];
+  setBusy(true);
+  loaded = null;
+  const started = performance.now();
+  const status = $("load-status");
+  const progress = $("progress");
+  status.className = "status";
+  $("bar").style.width = "0";
+  // The stage text plus a running clock; the clock shows the page is alive while a stage gives no progress.
+  let stage = "";
+  let stageStarted = started;
+  const render = () => {
+    const elapsed = (performance.now() - stageStarted) / 1000;
+    status.replaceChildren(stage, " ", el("span", "t", elapsed >= 1 ? `(${seconds(elapsed)})` : ""));
+  };
+  const setStage = (text, busyBar) => {
+    if (text !== stage) { stage = text; stageStarted = performance.now(); }
+    progress.classList.toggle("busy", busyBar);
+    render();
+  };
+  const clock = setInterval(render, 500);
+  let found = "";
+  let lastBytes = 0;
+  let lastTime = started;
+  let rate = 0;
+  try {
+    await llav.load(model.url, (name, detail) => {
+      if (name === "runtime") setStage("Loading the WebAssembly runtime...", true);
+      else if (name === "cache") setStage("Checking the browser's cache...", true);
+      else if (name === "cached") found = "Found the model in the browser's cache. ";
+      else if (name === "download") {
+        if (!detail.total) { setStage(`Downloading, ${gb(detail.loaded)} GB so far...`, true); return; }
+        const now = performance.now();
+        if (now - lastTime > 1000) {
+          const current = (detail.loaded - lastBytes) / ((now - lastTime) / 1000);
+          rate = rate ? 0.7 * rate + 0.3 * current : current;
+          lastBytes = detail.loaded;
+          lastTime = now;
+        }
+        const left = rate > 0 ? `, about ${seconds((detail.total - detail.loaded) / rate)} left` : "";
+        const speed = rate > 0 ? ` at ${(rate / 1e6).toFixed(0)} MB/s${left}` : "";
+        progress.classList.remove("busy");
+        $("bar").style.width = `${(100 * detail.loaded / detail.total).toFixed(1)}%`;
+        stage = `Downloading ${gb(detail.loaded)} of ${gb(detail.total)} GB${speed}.`;
+        render();
+      } else if (name === "memory") {
+        setStage(`${found}Reading the file header...`, true);
+      } else if (name === "log") {
+        // llama.cpp's load log, mapped to its three steps; loading the weights takes most of the time.
+        const step = STEPS.find(([pattern]) => pattern.test(detail));
+        if (step && !stage.endsWith(step[1])) { stage = found + step[1]; render(); }
+      }
+    });
+    $("bar").style.width = "100%";
+    loaded = model;
+    const threads = llav.wllama.isMultithread() ? `${llav.wllama.getNumThreads()} threads` : "one thread";
+    const where = llav.gpu ? "Running on WebGPU." : `Running on the CPU, ${threads}.` +
+      (LlavBrowser.webgpu() ? " The browser reports WebGPU but gave no adapter." : "");
+    status.textContent = `Loaded ${model.label.split(" (")[0]} in ${seconds((performance.now() - started) / 1000)}. ${where}`;
+    $("ask-status").textContent = "";
+  } catch (err) {
+    status.className = "status bad";
+    status.textContent = `Could not load the model: ${err.message ?? err}`;
+  } finally {
+    clearInterval(clock);
+    progress.classList.remove("busy");
+    setBusy(false);
+  }
+});
+
+function card(key, answer, mass) {
+  const node = el("div", "answer");
+  const head = el("div", "head");
+  head.append(el("span", "key", key), el("span", "kind", answer.type));
+  node.append(head);
+  let rows;
+  if (answer.type === "noul") {
+    node.append(el("div", "verdict", `${answer.noul >= 0.5 ? "Yes" : "No"}, p(yes) = ${fmt(answer.noul)}`));
+    rows = [["Yes", answer.noul], ["No", 1 - answer.noul]];
+  } else if (answer.type === "choice") {
+    node.append(el("div", "verdict", answer.choice));
+    rows = Object.entries(answer.probabilities);
+  } else {
+    const nearest = answer.legend[String(Math.round(answer.score))];
+    node.append(el("div", "verdict", `${answer.score.toFixed(2)}, near "${nearest}"`));
+    rows = Object.entries(answer.probabilities).map(([i, p]) => [`${i} ${answer.legend[i]}`, p]);
+  }
+  const best = Math.max(...rows.map(([, p]) => p));
+  const bars = el("div", "bars");
+  for (const [name, p] of rows) {
+    const label = el("span", "name", name);
+    label.title = name;
+    const track = el("span", "track");
+    const fillBar = el("i", p === best ? "top" : "");
+    fillBar.style.width = `${(100 * p).toFixed(1)}%`;
+    track.append(fillBar);
+    bars.append(label, track, el("span", "v", fmt(p)));
+  }
+  node.append(bars);
+  const meta = el("div", "meta");
+  if (answer.confidence != null) meta.append(`confidence ${fmt(answer.confidence)} · `);
+  meta.append(`candidate mass ${fmt(mass)}`);
+  if (mass < LOW_MASS) meta.append(" ", el("span", "low", "low: the options may not fit"));
+  node.append(meta);
+  return node;
+}
+
+$("ask").addEventListener("click", async () => {
+  const error = $("error");
+  error.hidden = true;
+  let body;
+  try {
+    body = { state: $("state").value, questions: JSON.parse($("questions").value) };
+  } catch (err) {
+    error.textContent = `The questions are not valid JSON: ${err.message}`;
+    error.hidden = false;
+    return;
+  }
+  const answers = $("answers");
+  answers.replaceChildren();
+  $("raw").hidden = true;
+  const keys = body.questions && typeof body.questions === "object" ? Object.keys(body.questions) : [];
+  const slots = Object.fromEntries(keys.map((k) => {
+    const slot = el("div", "answer pending", `${k}: waiting`);
+    answers.append(slot);
+    return [k, slot];
+  }));
+  setBusy(true);
+  $("ask-status").textContent = "Reading...";
+  try {
+    const result = await llav.ask(body, loaded.id, (key, answer, mass) => slots[key].replaceWith(card(key, answer, mass)));
+    const n = keys.length;
+    $("ask-status").textContent = `${n} question${n === 1 ? "" : "s"} in ${result.seconds.toFixed(1)} s, ` +
+      `${result.response.usage.input_tokens} prompt tokens`;
+    $("raw-request").textContent = JSON.stringify({ model: loaded.id, ...body }, null, 2);
+    $("raw-response").textContent = JSON.stringify(result.response, null, 2);
+    $("raw").hidden = false;
+  } catch (err) {
+    answers.replaceChildren(...answers.querySelectorAll(".answer:not(.pending)"));
+    error.textContent = err instanceof ValidationError ? `Invalid request, ${err.message}` : `Failed: ${err.message ?? err}`;
+    error.hidden = false;
+    $("ask-status").textContent = "";
+  } finally {
+    setBusy(false);
+  }
+});
+</script>
+</body>
+</html>
