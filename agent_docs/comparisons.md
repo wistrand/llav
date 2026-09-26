@@ -13,6 +13,7 @@ with an Intel Arc B390 iGPU, llama.cpp build 10809, Q8_0 GGUFs.
 - Comparison with Laya and von
 - Against the Jevals board
 - Jev through OpenRouter
+- The open decision-model ecosystem
 - Open questions
 
 ## The System One landscape
@@ -166,6 +167,12 @@ accuracy run comparable to its `shape777` result, not this screening.
 |    4 | Granite 4.2 3B     | trim      |   3.70 s |     0.98 s | 18/19 | 13/17 | No order bias at all, but probabilities saturate at 0 or 1, including on misses      |
 |    5 | SmolLM3-3B         | trim      |   3.02 s |     0.77 s | 17/19 | 10/17 | Misreads negation; the prompt carries today's date (see [gotchas.md](gotchas.md))    |
 
+Added 2026-09-26 without re-ranking: `gemma-4-e4b` (Google Gemma 4 E4B, 8.0 GB Q8_0, Apache 2.0), from the
+second screening round below: 19/19 and 17/17 like the default, no reversal flips, all mass on the letters,
+0.54 s cold and 0.26 s repeat for 10 questions on the RTX PRO 4000 without the helper (the table above was
+timed on the laptop). It would rank second on accuracy; the same caveat as for the default applies before
+any switch.
+
 This ranking weighs accuracy first, and with the native helper on a fast GPU it needs no trade-off at all: the
 default is then the fastest on repeats as well (see
 [performance.md](performance.md#what-the-helper-does-to-the-model-choice)). Without the helper, on speed alone
@@ -186,6 +193,40 @@ calibration; see "Muse Glimmer 30B, a test".
 Granite 4.0 Micro was dropped: Granite 4.2 3B matched or beat it on every measure. A few-shot prompt or a
 fine-tuned readout might rescue the failing models, but either changes the prompt format and needs its own
 validation.
+
+### Screening, round two (2026-09-26)
+
+Six popular GGUFs not in the table above, on an RTX PRO 4000 Blackwell through llama-server without the
+helper (`agent_docs/experiments/scripts/screen.sh`, run on the box; logs and outputs in `local/results/screen/`). Besides `benchmark.py
+accuracy` and `timing`, each got 300 questions (150 AG News, 150 Banking77) in the base order and 6 random
+permutations, the fixed budget of [experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md).
+
+| Model (Q8_0)     | Size    | Easy  | Hard  | Reversal flips | Letter mass, median (min) | Wrong of 300 | After averaging | Confident and flips: wrong / stable: wrong | 10 q, cold / repeat |
+|------------------|--------:|------:|------:|---------------:|---------------------------|-------------:|----------------:|--------------------------------------------|---------------------|
+| Gemma 4 E4B      |  8.0 GB | 19/19 | 17/17 |           0/11 | 1.000 (1.000)             |     57 (19%) |      51 (-11%)  | 48% / 12%                                  | 0.54 / 0.26 s       |
+| Llama 3.1 8B     |  8.5 GB | 18/19 | 14/17 |           1/11 | 1.000 (0.999)             |     64 (21%) |      45 (-30%)  | 36% / 8%                                   | 0.68 / 0.29 s       |
+| Mistral 7B v0.3  |  7.7 GB | 18/19 | 13/17 |           0/11 | 0.983 (0.832)             |     78 (26%) |      65 (-17%)  | 41% / 7%                                   | 0.75 / 0.34 s       |
+| Llama 3.2 3B     |  3.4 GB | 17/19 | 11/17 |           0/11 | 1.000 (1.000)             |    129 (43%) |     102 (-21%)  | 22% / 8%                                   | 0.38 / 0.19 s       |
+| gpt-oss-20b      | 12.1 GB | 18/19 | 16/17 |           0/11 | 1.000 (0.999)             |          n/a |             n/a | n/a                                        | 0.61 / 0.34 s       |
+| Gemma 4 12B      | 12.7 GB |  7/19 |  7/17 |          11/11 | 0.022 (0.001)             |    233 (78%) |     180         | (mass off the letters; see below)          | 1.12 / 0.47 s       |
+
+- Gemma 4 E4B matches Qwen3.5-4B on both benchmark sets (the only other model to do so), has the fewest
+  errors of the six on the 300, no reversal flips, all its mass on the letters, and a usable speed. The
+  strongest non-Chinese model seen under llav; a candidate for the pinned list.
+- Llama 3.1 8B is a solid second at twice the size; Mistral 7B leaks mass off the letters (median 0.983,
+  one question at 0.83), so its low-mass cue would need its own profile in `templates.py`.
+- Averaging over orders removes 11 to 30% of errors on every model that works, and a confident answer
+  that changes under some order is wrong 3 to 6 times as often as one that does not: the experiment's two
+  results, now on nine models from five families.
+- gpt-oss-20b was refused by the startup probe in the first pass (its next token is the Harmony channel
+  marker `<|channel|>`, with all the mass, the Muse case); with `<|channel|>final<|message|>` as the
+  assistant prefix it scores 18/19 and 16/17 with no flips and all its mass on the letters, the second-best
+  hard score after Qwen3.5-4B and Gemma 4 E4B. `templates.py` now detects the Harmony template and
+  supplies the header, so it works unchanged. Its 300-question run was not repeated.
+- Gemma 4 12B passes the startup probe and then puts 2% of its mass on the letters: with thinking
+  correctly off, its next token is `Based` or `The`, prose, and no assistant prefix tried made a letter
+  likely. It does not follow the letter-only instruction that its E4B sibling follows; not usable under
+  llav's readout (see [gotchas.md](gotchas.md)).
 
 ## Comparison with CLM
 
@@ -547,6 +588,127 @@ llav's order figure leaves out candidate selection, fixed since by `_align_lette
   Jev (1.7 s for a repeat of 10 questions on an 1,800-token text).
 - Throughput, one request at a time: 1,176 questions (about 1,145 requests) in 413 s and 8,072 rotations
   (976 requests) in 363 s, about 2.7 to 2.8 requests a second.
+
+## The open decision-model ecosystem
+
+Surveyed 2026-09-26 from the web; check before citing. Jev's launch on 2026-09-15 produced, within eleven
+days, more than thirty open reproductions, two independent benchmarks and a local runtime. Where llav
+stands in it:
+
+- [Ollaya](https://ollaya.dev/) ([GitHub](https://github.com/ollaya-dev/ollaya), Apache-2.0, Rust, ONNX
+  Runtime and llama.cpp): "Ollama for decision models". Pulls and serves Laya, decider, Kev, NLI and
+  GLiClass encoders, Winnow (Gemma 4 fine-tunes as GGUF), Qwen3Guard and others behind TypeSafe's
+  `/v1/systemone` and `/v1/models`, with an MCP server and desktop apps. Temperatures per question type and
+  option count ship with each model and can be refitted through a Modelfile. Its "typed-decisions" accuracy
+  (decider:2b 0.591, Kev 9B 0.722, Winnow 12B 0.702, Laya 0.361) is not defined in its README. llav and
+  Ollaya overlap in the API and in serving a letter-logit model through llama.cpp; Ollaya serves fine-tuned
+  models, llav serves any chat GGUF with a fixed prompt.
+- [decider](https://github.com/Mapika/decider) (Mapika, Apache-2.0): Qwen3.5 fine-tunes at 0.8B, 2B, 4B and
+  35B-A3B that read option-letter logits at an answer slot, all of a request's questions rendered into one
+  sequence and read in one pass. Trained on about 95 public decision datasets plus agent and game data, an
+  RL stage and a LoRA stage; per-type temperatures. decider-4b v2 tops JevBench (64.1 against Jev's 63.3);
+  decider-35b-a3b is the best-calibrated entry on the Decision Index (ECE 3.1 against Jev's 6.5). Its results
+  note that reversing the order of the questions in a request changes up to 12% of answers: packing questions
+  into one pass lets them interfere, which llav's separate suffixes avoid.
+- [reflex](https://github.com/kshetrajna12/reflex) (kshetrajna12, MIT): a frozen Qwen3.5-4B with an
+  "Evidence / Criterion" prompt, llav's own construction. Every adapter they trained was rejected for losing
+  general judgement. Each question is asked twice in the same pass with two option orders and the two
+  readings averaged: on JevBench's public hard tier 0.658 to 0.685 accuracy and ECE 0.086 to 0.081 for the 4B,
+  0.703 to 0.766 and 0.088 to 0.061 for their 27B, at about a 5% latency cost; they also note that scattered
+  readings across orders predict correctness. reflex ranks 7th on JevBench (54.0) against SemIf's 11th (47.7),
+  the same base model and framing without the averaging. This is the closest project to llav and prior art
+  for the averaging result in [experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md).
+- [Kev](https://github.com/jaredpalmer/kev) (Jared Palmer, Apache-2.0): LoRA plus a pointer head that scores
+  each option at the end of its span, on Qwen3.5 at 0.8B, 4B, 9B and 27B, trained on about 10,000 examples
+  from ten public sets; a different readout (per-option scoring) from the letter logits. JevBench 28th.
+- [JevBench](https://github.com/fstandhartinger/jevbench) (Benchmark Heaven, MIT harness): 534 public and
+  308 sealed decisions in four tiers; the score averages intelligence (chance-corrected accuracy), calibration
+  (ECE and fidelity to label distributions), speed and cost. Its `typesafe` adapter runs against any
+  `/v1/systemone` server, so llav can be scored with the public 231 items today. v1.4.2 (2026-09-24):
+  decider-4b v2 64.1, Jev 63.3, JevK5 62.0, Cygnet 61.8, Hopper 59.4, Winnow 55.6, reflex 54.0, djev 52.2,
+  SemIf 47.7 (11th), OpenJev 36.9, Kev 4B 36.1, Laya 30.3, Von 27.5, CLM-8B 8.6 (78th). Its order-robustness
+  diagnostic (issue #40: 139 public choice items in four orders) found 5% decisive flips for Jev, 0% for
+  Circuit-8b and 5% near-tie flips for Circuit-1.7b, and an OpenJev variant that scored 21% instead of 72%
+  with yes and no reversed.
+- [Decision Index](https://huggingface.co/spaces/multimodalart/jev-decision-index) (multimodalart, edition
+  0.1 on 2026-09-22, 0.2 since): every open reproduction and Jev over 132,422 requests from 37 to 40
+  benchmarks on one RTX PRO 6000, no truncation, no prompt tuning, unanswered counts as wrong,
+  chance-corrected. Jev 59.5, decider-35b-a3b 54.3 (4th of 32), decider-2b 44.0. The
+  [harness](https://github.com/webdevtodayjason/decision-index) has an `http` engine for any `/v1/systemone`
+  server and runs as a Hugging Face Job.
+
+What this means for llav: the ecosystem competes on fine-tuned weights (decider, Kev, Winnow) and
+leaderboard scores; llav's point is ease of install and reuse of existing models, any chat GGUF with a fixed
+prompt and no weights of its own. Its accuracy is SemIf's (same prompt, same model), around 47 to 48 on
+JevBench; reflex shows the same base and framing with two-order averaging reaches 54. llav's own public-item
+run is in the next section, for orientation; llav is not tuned toward either board.
+
+### llav on JevBench's public items (2026-09-26)
+
+JevBench's harness (`local/jevbench`, MIT) run from the laptop through an SSH tunnel against llav on the
+RTX 3090 box (Qwen3.5-4B Q8_0, native helper), 231 public decisions: `original` (72; 24 noul, 36 choice, 12
+score), `easy` (48), `hard` (111; 38 noul, 67 choice, 6 score). Results in `local/results/jevbench/`. The box's
+GPU was busy with two other runs and the tunnel adds a hop, so the latencies (p50 0.5 to 0.9 s) say nothing
+about the speed axis; accuracy and calibration are unaffected. Order averaging goes through
+`scripts/orders-proxy.py`, a research proxy that asks llav each choice question in several orders in one
+request and averages.
+
+| Run                                                 | original         | easy            | hard             |
+|-----------------------------------------------------|------------------|-----------------|------------------|
+| llav as served, one order                           | 68/72, ECE 0.024 | 48/48, ECE 0.010 | 66/111, ECE 0.118 |
+| 4 orders averaged per choice question               | 68/72, ECE 0.053 | 48/48, ECE 0.012 | 66/111, ECE 0.133 |
+| nouls asked as yes/no choices, one order            | 71/72, ECE 0.060 | not run         | 69/111, ECE 0.110 |
+| nouls as yes/no choices, both orders, 4 for choices | 70/72, ECE 0.062 | not run         | 69/111, ECE 0.118 |
+| reflex 4B (two orders), from their README           | 0.917            | 1.000           | 0.685            |
+| decider-4b v2, from their results                   | 0.986            | 1.000           | 0.676            |
+
+- Averaging over option orders does nothing here: the same 66 of 111 on hard, with 13 answers changed (5
+  fixed, 5 broken, 3 still wrong), all near-ties at 0.3 to 0.6 on the multi-hop, temporal-numeric and
+  long-policy families. Those are reasoning failures with no stable answer to recover; the averaging gain
+  measured in [experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md) comes from
+  confusable-option classification, which JevBench's hard tier has little of (routing_hard 5/5, trap 8/8).
+- The nouls are where llav loses, and the loss is the prompt, not the order: asked as a two-option choice
+  (`{"yes": criteria.true, "no": criteria.false}`) in a single order, 23/24 and 27/38 against 20/24 and
+  24/38 with the noul fold (`Answer Yes when: ...`, chosen for Granite in [design.md](design.md)); asking
+  both orders adds nothing on top. Small counts, but the direction is the same on both tiers and this is
+  where reflex's yes/no "both directions" gain plausibly comes from too. On the authored rule-only nouls the
+  fold scores 50/50 and the choice framing 43/50 (see
+  [experiments/noul-framing.md](experiments/noul-framing.md)): the fold stays, and llav is not tuned toward
+  this benchmark.
+- Where llav stands: with nouls as choices, 71/72, 48/48 and 69/111 (0.622 hard) against reflex's 0.917,
+  1.000, 0.685 and decider-4b v2's 0.986, 1.000, 0.676. The hard tier's remaining errors are
+  temporal_numeric (1 of 15 right), probability (4 of 10) and long_policy (10 of 19): arithmetic and
+  multi-step policy, which a 4B model without reasoning does not do, in any order.
+- The calibration axis is JevBench's ECE plus fidelity to label distributions; llav's hard-tier ECE 0.11 to
+  0.13 is about reflex's 0.081 with their calibration file off. A temperature fitted on the public items
+  would be circular; the sealed 308 are what the board scores.
+
+### llav's latency for JevBench's speed axis (2026-09-26)
+
+JevBench measures speed itself: caller wall time from a Hetzner box in Germany, one request at a time, p50
+and p95 per decision, then `x2 + 0.15 s` for self-hosted endpoints and `100 - 20 log10(s / 0.1 s)`, the mean
+of the p50 and p95 scores. Measured here on an idle RTX PRO 4000 Blackwell (Vast, a Bell Canada address),
+Qwen3.5-4B Q8_0 with the native helper, the harness's 231 public decisions. Results in
+`local/results/jevbench/idle-tunnel-4000/` and `/root/jevbench-runs/` on the box.
+
+| Per decision                          | easy / original p50, p95 | hard p50, p95     | Speed score (easy, hard) |
+|---------------------------------------|--------------------------|-------------------|--------------------------|
+| On the box, one order                 | 0.077, 0.088 s           | 0.133, 0.572 s    | 90.0, 82.7               |
+| On the box, 4 orders averaged (proxy) | 0.117, 0.138 s           | 0.195, 0.600 s    | 87.9, 81.4               |
+| From the laptop through the SSH tunnel | 0.62, 0.69 s            | 0.69, 0.98 s      | 75.4 (all tiers)         |
+
+- The server itself answers a short-state decision in 77 ms and a long hard-tier state in 133 ms at the
+  median; the hard p95 of 0.57 s is the longest states read for the first time. Averaging over four orders
+  adds 30 to 60 ms: the helper decodes the extra suffixes in the same batch.
+- The network is the larger term from far away. The TCP round trip from the laptop (Sweden) to the box is
+  about 125 ms; a request on a kept-alive connection through the tunnel costs 0.30 s, a new connection
+  0.40 to 0.62 s depending on the client, because an SSH tunnel opens a channel per connection and the
+  harness makes one connection per request. Benchmark Heaven calls a plain HTTP endpoint, so their number
+  would be near one handshake plus one exchange plus the server: about 0.33 s from a comparable distance,
+  a speed score around 82; SemIf's 83.7 was measured on a Canadian box too. From a European box the same
+  server would score about 87. The tunnel figure (75.4) is not what they would measure.
+- Not tuned toward the board: these numbers say where llav's latency comes from (the server is a small
+  part of it from far away) and what averaging costs.
 
 ## Open questions
 
