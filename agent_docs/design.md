@@ -48,7 +48,10 @@ Granite 4.2 3B answers the criterion and reads option descriptions as labels: a 
 `criteria.true` scored 0.017 where Qwen3.5-4B scored 0.987. Appending `Answer Yes when: <criteria.true>`
 (and the `No` side when given) to the criterion fixed both, 1.000 and 0.999, with the option descriptions
 left alone. `choice` and `score` are not folded: there the descriptions are the options. Measurements in
-[research.md](research.md).
+[research.md](research.md). The fold has a cost on rubric-style nouls: on JevBench's public nouls the same
+questions asked as yes/no choices without the fold scored better, while on 50 authored rule-only nouls the
+fold scores 50/50 and the choice framing 43/50; the framings trade off, the fold stays, and the plan to
+settle it on caller-style data is in [experiments/noul-framing.md](experiments/noul-framing.md).
 
 Why choice keys are folded into the description: SemIf's fixtures had self-contained descriptions, but
 System One criteria are often `{"billing": "Payments"}` or `{"billing": null}`, where the key carries the
@@ -67,8 +70,10 @@ the caller's key order. Measurements in [research.md](research.md).
 
 Why some templates get an assistant prefix (`templates.py`): the prompt must end where the answer letter can
 be the next token. Muse Glimmer's template ends at `<|start|>assistant`, and its model first writes a
-recipient header, so llav appends ` to=user<|message|>` as template text. The profile is chosen from the
-rendered template, never from a model name; `--assistant-prefix` overrides it. The prefix is not part of
+recipient header, so llav appends ` to=user<|message|>` as template text; gpt-oss models end the same way
+and first name a Harmony channel, so their profile appends `<|channel|>final<|message|>`, the final answer
+rather than the analysis channel, which also keeps them from reasoning first. The profile is chosen from
+the rendered template, never from a model name; `--assistant-prefix` overrides it. The prefix is not part of
 `messages()`, so SemIf's prompt format is unchanged for every template that needs none.
 
 `instructions` and structured criteria are placed into the JSON payload as JSON values, not stringified.

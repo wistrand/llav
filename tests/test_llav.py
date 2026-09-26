@@ -220,7 +220,19 @@ MUSE_PROMPT = ('<|start|>system<|message|>SYS\n\nReasoning strength: high.\n\n# 
                '<|eot|><|start|>user<|message|>USER<|eot|><|start|>assistant')
 
 
+GPT_OSS_PROMPT = ("<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\n"
+                  "Reasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included "
+                  "for every message.<|end|><|start|>developer<|message|># Instructions\n\nSYS<|end|>"
+                  "<|start|>user<|message|>USER<|end|><|start|>assistant")
+
+
 class TemplateProfileTest(unittest.TestCase):
+    def test_detects_gpt_oss_from_its_harmony_template(self):
+        profile = templates.detect(GPT_OSS_PROMPT)
+        self.assertEqual(profile.name, "gpt-oss")
+        self.assertEqual(profile.assistant_prefix, "<|channel|>final<|message|>")
+        self.assertEqual(profile.low_mass, templates.DEFAULT.low_mass)
+
     def test_detects_muse_glimmer_from_its_template(self):
         profile = templates.detect(MUSE_PROMPT)
         self.assertEqual((profile.name, profile.assistant_prefix), ("muse-glimmer", " to=user<|message|>"))

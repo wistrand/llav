@@ -22,7 +22,7 @@ answer:    billing 0.85, technical 0.15, sales 0.00
 
 llav runs an open model through [llama.cpp](https://github.com/ggml-org/llama.cpp) on your own machine.
 The default is [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B), but it is not the only choice: any GGUF
-chat model can be tried, llav checks at startup that it answers with option letters, and five alternatives
+chat model can be tried, llav checks at startup that it answers with option letters, and six alternatives
 are pinned for download, from Qwen3.5-2B to Meta's Muse Glimmer 30B (see [Quick start](#quick-start)).
 
 Each question is one forward pass: llav reads how likely the model is to answer with each option's letter.
@@ -54,9 +54,10 @@ their respective owners. llav reproduces the public request/response shape, not 
 - **Runs on any llama.cpp backend**, including Vulkan, CUDA, Metal, SYCL and CPU.
 - **Fast on repeated text.** The text is read once per request and kept for later requests, so a follow-up
   question about the same text takes about 0.2 s instead of 3 s on a laptop (see [Performance](#performance)).
-- **Numbers you can check.** A response header flags answers where the model wanted none of the options,
-  and `scripts/evaluate.py` measures accuracy and calibration on your own labelled examples (see
-  [Accuracy](#accuracy)).
+- **Numbers you can check.** A response header reports how much of the model's probability landed on the
+  options at all, which drops when a question has nothing to do with the text (it does not catch a missing
+  right answer among plausible options), and `scripts/evaluate.py` measures accuracy and calibration on
+  your own labelled examples (see [Accuracy](#accuracy)).
 
 ## Quick start
 
@@ -81,8 +82,9 @@ their respective owners. llav reproduces the public request/response shape, not 
    scripts/fetch-model.sh ~/models
    ```
 
-   Five alternatives are pinned too, all Apache 2.0: `qwen3.5-2b` (2.1 GB, the fastest),
-   `granite-4.0-h-tiny` (7.4 GB), `granite-4.2-3b` (3.9 GB), `smollm3-3b` (3.3 GB) and `muse-glimmer-30b`
+   Six alternatives are pinned too, all Apache 2.0: `qwen3.5-2b` (2.1 GB, the fastest),
+   `granite-4.0-h-tiny` (7.4 GB), `granite-4.2-3b` (3.9 GB), `smollm3-3b` (3.3 GB), `gemma-4-e4b` (8.0 GB, matches
+   the default on the benchmark sets) and `muse-glimmer-30b`
    (16.8 GB, as accurate as the default on the labelled set and better calibrated, but needs about 18 GB of
    GPU memory). Pass one as a second argument. Only the default is validated;
    [agent_docs/comparisons.md](agent_docs/comparisons.md) compares them and lists the models that failed.
@@ -178,8 +180,9 @@ their respective owners. llav reproduces the public request/response shape, not 
 - `X-Llav-Calibration` is `none`, or the id of the temperature file loaded with `--calibration`.
 - `X-Llav-Candidate-Mass` lists, per question in answer order, the probability the model gave the option
   letters over its whole vocabulary, for example `0.9991,0.9874`. Well below 1 means the model wanted to
-  say something else and the answer's probabilities are not worth reading. Near 1 says nothing about
-  whether the answer is right.
+  say something else and the answer's probabilities are not worth reading; that happens when the question
+  has nothing to do with the text, not when the right answer is missing from plausible options (the model
+  then picks the nearest one with its mass intact). Near 1 says nothing about whether the answer is right.
 
 The other endpoints: **`GET /v1/models`** (id, aliases, backend details), **`GET /openapi.json`** (the full
 contract, built from the code that serves it, also committed as [openapi.json](openapi.json)),
@@ -193,8 +196,9 @@ Every question becomes one prompt: a fixed system instruction, then a JSON paylo
 llav renders it with the model's own chat template, thinking disabled, and reads the next-token
 log-probabilities of `A`, `B`, … softmaxed over the declared options. Nothing is sampled, so there is no
 text to parse, no reasoning tokens to wait through, and nothing to retry when a model answers in prose.
-Where a template makes the model write a header before its answer (Muse Glimmer), llav adds the header to
-the prompt, and at startup it checks that an answer letter is among the likely next tokens.
+Where a template makes the model write a header before its answer (Muse Glimmer's recipient, gpt-oss's
+Harmony channel), llav adds the header to the prompt, and at startup it checks that an answer letter is
+among the likely next tokens.
 
 The readout is [SemIf](https://github.com/TheoLeeCJ/SemIf)'s `direct-options-v1`. Checked against SemIf's
 published PyTorch predictions on its 777 owned decisions: all 777 prompts identical, 768 answers agreed, and
@@ -229,9 +233,15 @@ measured with `scripts/evaluate.py`. ECE is the expected calibration error of th
 - **Overconfident at the top.** Answers above 0.9 averaged 0.986 and were right 93% of the time. A fitted
   temperature (`--calibration`) cut ECE from 0.069 to 0.023 on held-out questions, but what fits one task
   miscalibrates another, so fit on your own data.
-- **Option order matters on hard choices.** Asked with every rotation of its options, 19% of choice and
-  score answers changed under some order, about a third on confusable options (Banking77, Yelp) and 4% on
-  clear ones (DBpedia).
+- **Option order matters, and averaging over it helps.** On 6,944 choice questions, 24% of Qwen3.5-4B's
+  answers change under some order of the options (55 to 60% for the smaller pinned models), 3% on clear
+  categories (DBpedia) and 40% on confusable ones (Banking77). Asking each question in several orders and
+  averaging removes 8% of its errors (17 to 22% for the small models) and moves its probabilities closer to
+  how 100 human annotators voted; the size of the disagreement between orders adds nothing beyond the
+  averaged answer's confidence, but a confident answer that changes under some order is wrong 2 to 4 times
+  as often as one that does not, on nine models from five families. Measured, not yet a server option:
+  `scripts/orders-proxy.py` does it in front of llav; details in
+  [agent_docs/experiments/permutation-uncertainty.md](agent_docs/experiments/permutation-uncertainty.md).
 - The pinned `muse-glimmer-30b` scored the same 82.9% overall with better calibration (ECE 0.037 against
   0.069), using about three times the GPU memory (16 GB against 5 GB).
 - Trained open System One models scored lower on the same questions: Laya 73.0 to 74.8% (its
@@ -239,7 +249,8 @@ measured with `scripts/evaluate.py`. ECE is the expected calibration error of th
   about three times faster and win on news-topic classification.
 - TypeSafe's Jev, run through OpenRouter on the same 1,176 questions, scored 89.0% with ECE 0.040: 6 points
   ahead, most of it on confusable options (Banking77 card intents, Yelp stars), and less order-sensitive
-  (6% of answers change with option order, against llav's 19%). From here it answered in about 0.3 to 0.4 s
+  (6% of answers change with option order, against llav's 19% on that rotation run). From here it answered
+  in about 0.3 to 0.4 s
   per request; a local llav on a GPU was faster, on a laptop iGPU slower.
 - On two of Jevals' published tasks, rebuilt item for item, llav scored a Decision Score of 46.5 on PubMedQA
   (Jev 69.0; von and Laya near guessing) and -11.1 on HelpSteer2 helpfulness (Jev 9.2, and no model clearly
@@ -295,7 +306,7 @@ attaching to your own server, start it with `--ctx-checkpoints 0 --slot-save-pat
 
 llav checks at startup that the model answers with an option letter, and exits with a hint if it does not.
 Some chat templates end before the answer can start: Muse Glimmer's model must first write a recipient
-header. llav recognises such templates and adds the header itself (`GET /v1/models` shows it as
+header, gpt-oss must name its Harmony channel. llav recognises such templates and adds the header itself (`GET /v1/models` shows it as
 `backend.assistant_prefix`); `--assistant-prefix TEXT` sets it for a template it does not know, and
 `--assistant-prefix ''` turns it off.
 
