@@ -47,6 +47,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `docs/demo/`               | Browser demo: `llav.js` ports `prompt.py` and `questions.py` to wllama |
 | `local/`                   | Gitignored: fetched data, run outputs, one-off scripts the experiment docs cite |
 | `paper/`                   | The order-marginalizing article: `main.tex`, `build.sh` (tables, figures, HTML, PDF)  |
+| `.github/workflows/pages.yml` | Publishes `docs/` as the site with the paper copied in; Pages source must be "GitHub Actions" |
 
 ## Commands
 

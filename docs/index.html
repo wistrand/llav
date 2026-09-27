@@ -194,6 +194,7 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
     <a href="#start">Quick start</a>
     <a href="#api">API</a>
     <a href="#results">Results</a>
+    <a href="#paper">Paper</a>
     <a href="#speed">Speed</a>
     <a href="#options">Options</a>
     <a href="demo/">Try in the browser</a>
@@ -523,6 +524,19 @@ scripts/fetch-model.sh ~/models</code></pre>
   <p class="note">Abridged; all rows, the method and the caveats are in
     <a href="https://github.com/wistrand/llav/blob/main/agent_docs/comparisons.md">comparisons.md</a>. On
     HelpSteer2 no model clearly beats guessing.</p>
+  <h3 id="paper">Paper: option order</h3>
+  <p>The order in which the options are listed should not matter, but it does: on 6,944 choice questions the
+    top choice changes under some reordering on 24% of Qwen3.5-4B's answers and 44 to 60% of the smaller
+    models'. Averaging over several orders removes 5 to 21% of the errors on every model tested; the size of
+    the disagreement between orders adds nothing measurable to the averaged confidence, and a confident answer
+    that changes under some order is wrong 2 to 4 times as often, when the single-order answer is kept.
+    Seven models, five families, ten sources; the write-up is a short paper with its data, tables and figures in
+    the repository.</p>
+  <p>
+    <a class="button primary" href="paper/order-shouldnt-matter.pdf">Read the paper (PDF)</a>
+    <a class="button" href="paper/order-shouldnt-matter.html">HTML version</a>
+    <a class="button" href="https://github.com/wistrand/llav/tree/main/paper">Source and data</a>
+  </p>
 </section>
 
 <section aria-labelledby="speed">

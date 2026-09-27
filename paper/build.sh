@@ -20,5 +20,7 @@ else
   google-chrome-stable --headless=new --disable-gpu --no-pdf-header-footer \
     --print-to-pdf="$PWD/order-shouldnt-matter.pdf" "file://$PWD/order-shouldnt-matter.html" 2>/dev/null
 fi
+# Local preview of the site: docs/paper/ is gitignored; the Pages workflow copies the outputs when publishing.
+mkdir -p ../docs/paper && cp order-shouldnt-matter.pdf order-shouldnt-matter.html ../docs/paper/
 rm -rf pages && mkdir pages && pdftoppm -r 70 -png order-shouldnt-matter.pdf pages/page
 echo "order-shouldnt-matter.pdf: $(pdfinfo order-shouldnt-matter.pdf | awk '/^Pages/{print $2}') pages"

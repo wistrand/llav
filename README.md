@@ -234,13 +234,14 @@ measured with `scripts/evaluate.py`. ECE is the expected calibration error of th
   temperature (`--calibration`) cut ECE from 0.069 to 0.023 on held-out questions, but what fits one task
   miscalibrates another, so fit on your own data.
 - **Option order matters, and averaging over it helps.** On 6,944 choice questions, 24% of Qwen3.5-4B's
-  answers change under some order of the options (55 to 60% for the smaller pinned models), 3% on clear
-  categories (DBpedia) and 40% on confusable ones (Banking77). Asking each question in several orders and
-  averaging removes 8% of its errors (17 to 22% for the small models) and moves its probabilities closer to
-  how 100 human annotators voted; the size of the disagreement between orders adds nothing beyond the
-  averaged answer's confidence, but a confident answer that changes under some order is wrong 2 to 4 times
-  as often as one that does not, on nine models from five families. Measured, not yet a server option:
-  `scripts/orders-proxy.py` does it in front of llav; details in
+  answers change under some order of the options (44 to 60% for the smaller pinned models), 2% on clear
+  categories (DBpedia) and 31% on confusable ones (Banking77). Asking each question in several orders and
+  averaging removes 8% of its errors (11 to 21% for the small models) and moves its probabilities closer to
+  how 100 human annotators voted; the size of the disagreement between orders adds nothing measurable beyond
+  the averaged answer's confidence, but when a single order's answer is kept, a confident one that changes
+  under some order is wrong 2 to 4 times as often as one that does not, on seven models from five families.
+  Measured, not yet a server option: `scripts/orders-proxy.py` does it in front of llav. Written up in
+  [paper/](paper/) ([PDF](https://wistrand.github.io/llav/paper/order-shouldnt-matter.pdf)); measurements in
   [agent_docs/experiments/permutation-uncertainty.md](agent_docs/experiments/permutation-uncertainty.md).
 - The pinned `muse-glimmer-30b` scored the same 82.9% overall with better calibration (ECE 0.037 against
   0.069), using about three times the GPU memory (16 GB against 5 GB).

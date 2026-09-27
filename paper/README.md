@@ -18,4 +18,6 @@ The measurements it reports are described in
 | `build.sh`                   | Tables, figures, HTML, PDF (pdflatex if present, else Chrome), page images for checking    |
 
 `./build.sh` rebuilds everything from `data/summary.json`; only `extract.py` needs the raw outputs.
+It also copies the PDF and HTML to `docs/paper/` for a local preview of the site; that directory is gitignored, and
+the Pages workflow (`.github/workflows/pages.yml`) makes the same copy when it publishes the site.
 Standard library Python, `rsvg-convert`, and a TeX installation (or Chrome as a fallback for the PDF).

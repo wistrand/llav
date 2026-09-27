@@ -10,3 +10,4 @@ venv/
 local/
 paper/pages/
 paper/latex-build/
+docs/paper/
