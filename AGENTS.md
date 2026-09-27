@@ -1,1 +1,161 @@
-CLAUDE.md
+Guidance for agents working in this repo. Read this first, then the relevant file in `agent_docs/`.
+
+## What this is
+
+llav (Large Language Verdicts, pronounced "love" or "lahv") is an HTTP server that answers typed decision questions
+(`noul`, `choice`, `score`) about a caller's `state`, using a local GGUF model through `llama-server`. Its API
+follows the public shape of TypeSafe's System One API (`POST /v1/systemone`). Each question is one forward
+pass. llav reads the next-token log-probabilities of the answer letters `A`–`Z` and softmaxes them over the
+declared options; it never generates text. When a request asks several questions about one state, llav
+evaluates the state prefix once and reuses it for every question; evaluated states are cached as slot files
+for later requests.
+
+```
+client ──HTTP──> server.py ──> questions.py (validate, build answers)
+                     │    └──> calibration.py (optional temperature, --calibration)
+                     └──> engine.py ──HTTP──> llama-server (managed by runtime.py, or external)
+                            │ prompt.py builds the prompt
+                            └──pipe──> llav-readout (optional native helper, native.py)
+```
+
+## Layout
+
+| Path                       | Role                                                                   |
+|----------------------------|------------------------------------------------------------------------|
+| `src/llav/cli.py`          | Entry point `main()`: flags, managed vs external llama-server, cleanup |
+| `src/llav/server.py`       | `Handler`: routes, auth, body limits, error-to-status mapping          |
+| `src/llav/questions.py`    | `parse_request()`, `Question`, `build_answer()`, `confidence()`        |
+| `src/llav/prompt.py`       | `messages()`: SemIf `direct-options-v1` prompt; `LABELS`               |
+| `src/llav/engine.py`       | `LlamaClient`, `Engine.evaluate()`: tokenization, slots, readout       |
+| `src/llav/runtime.py`      | `LlamaProcess`: start, health-wait, stop llama-server                  |
+| `src/llav/webui.html`      | Optional browser UI (`--web-ui`); self-contained, no external requests |
+| `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
+| `src/llav/native.py`       | `NativeReadout`: the optional helper's process and protocol            |
+| `src/llav/calibration.py`  | `Calibration`: optional per-type temperature file, model hash check    |
+| `src/llav/templates.py`    | `detect()`: per-template defaults (assistant prefix, low-mass cue)     |
+| `native/llav-readout.cpp`  | That helper: batched readout against libllama; see native/README.md    |
+| `tests/test_llav.py`       | Unit tests with a fake llama-server; no model needed                   |
+| `scripts/write-openapi.py` | Writes the committed `openapi.json` from `openapi.py`                  |
+| `scripts/benchmark.py`     | `accuracy`, `timing`, `articles`, `fetch`, `phases` against a llav     |
+| `scripts/evaluate.py`      | Labelled data: accuracy, Brier, ECE, coverage; option-order `shifts`   |
+| `scripts/perturb.py`       | Experiment: does disagreement across option orders predict errors?     |
+| `scripts/orders-proxy.py`  | Research proxy: asks llav in several option orders and averages        |
+| `scripts/fetch-model.sh`   | Downloads a pinned GGUF (Qwen3.5-4B default) and checks SHA-256        |
+| `scripts/remote-gpu.sh`    | Starts llav on a rented CUDA box over SSH; NATIVE=1, TS_AUTHKEY=...    |
+| `agent_docs/`              | Deep dives, linked below                                               |
+| `docs/`                    | GitHub Pages site (`index.html`) and README screenshots                |
+| `docs/demo/`               | Browser demo: `llav.js` ports `prompt.py` and `questions.py` to wllama |
+| `local/`                   | Gitignored: fetched data, run outputs, one-off scripts the experiment docs cite |
+| `paper/`                   | The order-marginalizing article: `main.tex`, `build.sh` (tables, figures, HTML, PDF)  |
+
+## Commands
+
+```bash
+PYTHONPATH=src python3 -m llav --gguf PATH.gguf          # serve (starts llama-server)
+PYTHONPATH=src python3 -m llav --help                    # flags; the source of truth for options
+python3 -m unittest discover -s tests                    # unit tests
+scripts/fetch-model.sh DIR [MODEL]                       # get a pinned model (default qwen3.5-4b)
+scripts/benchmark.py timing http://127.0.0.1:8080        # also accuracy, articles, phases
+scripts/evaluate.py score http://127.0.0.1:8080 DIR      # after `evaluate.py fetch DIR`; also shifts, fit
+scripts/perturb.py run http://127.0.0.1:8080 DIR --out R.jsonl   # order-permutation experiment; then analyze, h2 (--budget fixed for the paper)
+```
+
+Runtime requirement: `llama-server` from llama.cpp on `PATH`, or passed with `--llama-server`. The README's
+Quick start lists install options per platform; `native/README.md` covers the optional readout helper.
+
+## Docs
+
+- [agent_docs/architecture.md](agent_docs/architecture.md): modules, request flow, shared-state flow,
+  tokenization split, slot pool, process lifecycle. Read before changing `engine.py` or `server.py`.
+- [agent_docs/design.md](agent_docs/design.md): API compatibility decisions: how each question type maps to
+  options, confidence and score formulas, aliases, usage semantics, error format, deliberate differences
+  from Jev.
+- [agent_docs/research.md](agent_docs/research.md): measurements of llav's readout: prompt fidelity against
+  SemIf's reference, labelled accuracy, calibration, option order, candidate mass, approaches rejected.
+  Read before changing the prompt, the readout or calibration.
+- [agent_docs/performance.md](agent_docs/performance.md): where a request's time goes, state reuse, the
+  native helper, timings per machine, scaling estimates. Read before changing anything on the hot path.
+- [agent_docs/comparisons.md](agent_docs/comparisons.md): other models under llav (screening, Muse Glimmer)
+  and other System One systems (CLM, Laya, von) on the same labelled questions.
+- [agent_docs/experiments/permutation-uncertainty.md](agent_docs/experiments/permutation-uncertainty.md):
+  the running experiment on permutation disagreement as an error signal: hypotheses, design, results so far.
+- [agent_docs/experiments/related-work.md](agent_docs/experiments/related-work.md): prior work on option
+  order, first-token readout, calibration, consistency as uncertainty and human label variation, and what
+  the experiment adds.
+- [agent_docs/experiments/paper-outline.md](agent_docs/experiments/paper-outline.md): the outline the article in `paper/` was written
+  from: sections, every figure and table with its data file, and the arms still to run.
+- [agent_docs/experiments/noul-framing.md](agent_docs/experiments/noul-framing.md): plan to measure how a
+  noul should be framed (the criteria fold against a yes/no choice), triggered by JevBench's public nouls.
+- [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps, plus the readout,
+  native-helper and calibration traps. Skim before touching llama-server flags, the readout, option
+  handling, the helper, or calibration.
+
+## Invariants
+
+- llav's point is ease of install and reuse of existing models: any chat GGUF through llama.cpp, a fixed
+  prompt, no weights of its own, no fine-tuning. Never tune it toward a benchmark; measurements on JevBench
+  or the Decision Index are for orientation, not targets. Improvements that count are fewer install steps,
+  more models working unchanged, and correctness on caller-style data.
+- Never add a third-party Python dependency. llav is standard library only. The runtime is `llama-server`;
+  the `llav-readout` helper in `native/` is optional, opt-in with `--native-readout`, and every path must
+  still work without it.
+- Never change the prompt format (system text, payload keys and order, JSON serialization, label letters)
+  without bumping `PROMPT_VERSION` in `prompt.py` and re-measuring agreement. Given the same descriptions,
+  `messages()` must produce SemIf's `direct-options-v1` prompt byte for byte; the validation evidence in
+  [agent_docs/research.md](agent_docs/research.md) depends on it.
+- Never sample or generate. The readout is `/completion` with `n_predict: 1`, `temperature: -1` and
+  `n_probs`, which returns a plain softmax over the raw logits. Do not use `post_sampling_probs`, grammars or
+  `logit_bias`.
+- Always tokenize caller text (state, instructions, criteria) with `parse_special: false`, so it cannot
+  forge chat-template control tokens. Only template text is tokenized with special-token parsing.
+- Always run llama-server with `--ctx-checkpoints 0`, `--slot-save-path` and `--swa-full`. Whether a slot's cache may be
+  reused between questions is decided by `Engine`'s startup probe (`trims`), never by a model name; a
+  backend that fails the probe restores the saved prefix before every question.
+- Always choose per-model behaviour from what the template or backend does (`templates.detect`, the trim
+  probe), never from the model's name or file name.
+- Never let a cached slot file outlive the state that produced it: files are keyed by the prefix tokens and
+  a per-run id, evicted by `--state-cache`, and deleted in `Engine.clear_cache` at shutdown.
+- Always return a slot to `Engine.free` in a `finally`, or the server loses capacity permanently.
+- Never let a native-readout failure fail a request: `Engine` drops the helper and answers through
+  llama-server instead. The HTTP path stays the reference implementation, and the tests cover it.
+- Never ship a calibration file. Temperatures fitted on one workload miscalibrate another (see
+  [agent_docs/research.md](agent_docs/research.md)); callers fit their own with `scripts/evaluate.py fit`.
+- Never change the native helper's response layout without bumping `PROTOCOL` in `native.py` and the ready
+  line in `native/llav-readout.cpp` together. A helper built from older source must be refused at startup,
+  not read with the wrong layout.
+- Keep the response body to the public System One shape: `model`, `answers`, `usage` with only
+  `input_tokens` and `output_tokens`. Put llav-specific data in `X-Llav-*` headers.
+- Never present llav as Jev or TypeSafe. Responses name llav's own model id, and the README keeps its
+  independence statement. Accepting `jev-latest` as a request alias is allowed for SDK compatibility.
+
+## Conventions
+
+- Python 3.10+, 4-space indent, double quotes, lines up to about 120 characters.
+- Match the surrounding code's comment density; comments state why, not what.
+- New llama-server interactions go through `LlamaClient`, which turns every backend failure into
+  `EngineError` (HTTP 500).
+- Map new failure modes to the existing statuses in `server.py`: 422 for caller mistakes, 529 for
+  capacity, 500 for backend faults.
+- The README's Options block is hand-written. When flags change in `cli.py`, update it in the same change.
+- `docs/index.html` is the project's GitHub Pages site and repeats the README's quick start, options and
+  headline results. When those change, update it in the same change; retake the screenshots in `docs/` when
+  the web UI changes.
+- `docs/demo/llav.js` is a JavaScript port of `prompt.py` and `questions.py` for the browser demo. When the
+  prompt, the question mapping or the answer shape changes, change the port in the same change; its prompts
+  must stay byte-identical to `messages()`.
+- The API is described once, in `openapi.py`. When routes, question types, limits or statuses change, update
+  it and run `PYTHONPATH=src python3 scripts/write-openapi.py`; a test fails while `openapi.json` is stale.
+
+## Documentation Style
+
+- Markdown links for doc references you want an agent to follow, not backticks. Backticks are fine for
+  source paths in tables and inline code. Align table columns.
+- No AI-isms (no "powerful", "seamlessly", "leverage", rule-of-three, "not just X but Y"). No em dashes or
+  emojis in project copy. State the point directly.
+- Concise; assume the agent is competent. Add only what it can't infer: project names, rules,
+  constraints, and the why.
+- State each rule on its own line as always/never; a rule buried mid-paragraph gets skipped.
+- Don't copy constants from code into docs; name the constant and where it lives.
+- Mark inferred claims and open questions; don't present a guess as a fact.
+- Docs change in the same change as the code they point at. Keep this file the routing entry point; move
+  subsystem detail into `agent_docs/`.

@@ -2,7 +2,7 @@ Guidance for agents working in this repo. Read this first, then the relevant fil
 
 ## What this is
 
-llav (Large Language Verdicts, pronounced "lahv") is an HTTP server that answers typed decision questions
+llav (Large Language Verdicts, pronounced "love" or "lahv") is an HTTP server that answers typed decision questions
 (`noul`, `choice`, `score`) about a caller's `state`, using a local GGUF model through `llama-server`. Its API
 follows the public shape of TypeSafe's System One API (`POST /v1/systemone`). Each question is one forward
 pass. llav reads the next-token log-probabilities of the answer letters `A`–`Z` and softmaxes them over the

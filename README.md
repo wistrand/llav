@@ -11,7 +11,7 @@
 ╰───────────────────────────╯
 ```
 
-llav, Large Language Verdicts, pronounced "lahv". Ask a local language model yes/no, multiple-choice and
+llav, Large Language Verdicts, pronounced "love" or "lahv". Ask a local language model yes/no, multiple-choice and
 rating questions about a piece of text, and get probabilities back instead of generated text:
 
 ```
