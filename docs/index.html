@@ -331,7 +331,9 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
 
   <p>Each question is one forward pass. llav reads how likely the model is to answer with each option's letter and
     normalizes that over the options. Nothing is sampled, so there is no output to parse, no reasoning to wait for,
-    and nothing to retry when a model answers in prose.</p>
+    and nothing to retry when a model answers in prose. The distribution it reads is the one a model consults at
+    every step of a generation; the companion project <a href="https://wistrand.github.io/llpeek/">llpeek</a>
+    charts those distributions token by token.</p>
   <p>When a request asks several questions about the same text, llav reads the text once and shares it between
     them, and keeps it for later requests. An optional native helper answers all of a request's questions in one
     batched pass on a GPU.</p>
@@ -592,7 +594,8 @@ llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own lla
 <footer>
   llav · MIT licence · <a href="https://github.com/wistrand/llav">github.com/wistrand/llav</a><br>
   The decision prompt and readout follow <a href="https://github.com/TheoLeeCJ/SemIf">SemIf</a>'s
-  <code>direct-options-v1</code>.
+  <code>direct-options-v1</code>. Companion project: <a href="https://wistrand.github.io/llpeek/">llpeek</a>,
+  which charts a model's next-token candidates step by step.
 </footer>
 
 <div class="tip" id="tip" role="status" aria-live="polite"></div>

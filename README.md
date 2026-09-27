@@ -200,6 +200,10 @@ Where a template makes the model write a header before its answer (Muse Glimmer'
 Harmony channel), llav adds the header to the prompt, and at startup it checks that an answer letter is
 among the likely next tokens.
 
+The next-token distribution llav reads is the same one a model consults at every step of a generation. The
+companion project [llpeek](https://github.com/wistrand/llpeek) ([live site](https://wistrand.github.io/llpeek/))
+charts those distributions token by token, which is a good way to see what a decision readout picks out of them.
+
 The readout is [SemIf](https://github.com/TheoLeeCJ/SemIf)'s `direct-options-v1`. Checked against SemIf's
 published PyTorch predictions on its 777 owned decisions: all 777 prompts identical, 768 answers agreed, and
 every disagreement was a near-tie between 0.47 and 0.53.
