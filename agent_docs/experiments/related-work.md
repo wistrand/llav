@@ -28,8 +28,8 @@ leaves for [permutation-uncertainty.md](permutation-uncertainty.md).
   Defines a per-question flip rate (at least two distinct answers across permutations) as an order-sensitivity
   metric, but uses it to measure debiasing, not as a per-item error signal.
 - Guda, Francis, Ashungafac, Joe-Wong and Busogi, "Rethinking Selection Bias in LLMs: Quantification and
-  Mitigation using Efficient Majority Voting", ICLR 2025 workshop on uncertainty and hallucination (read, PDF
-  in ~/Downloads), extended as "Quantifying and Mitigating Selection Bias in LLMs: A Transferable LoRA
+  Mitigation using Efficient Majority Voting", ICLR 2025 workshop on uncertainty and hallucination, extended
+  as "Quantifying and Mitigating Selection Bias in LLMs: A Transferable LoRA
   Fine-Tuning and Efficient Majority Voting Approach" ([arXiv 2511.21709](https://arxiv.org/abs/2511.21709),
   Nov 2025). Three things overlap with this experiment:
   - Their bias metric is the mean over options of the variance of that option's probability across

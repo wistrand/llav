@@ -8,3 +8,5 @@ dist/
 venv/
 .claude/
 local/
+paper/pages/
+paper/latex-build/

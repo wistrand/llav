@@ -46,6 +46,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `docs/`                    | GitHub Pages site (`index.html`) and README screenshots                |
 | `docs/demo/`               | Browser demo: `llav.js` ports `prompt.py` and `questions.py` to wllama |
 | `local/`                   | Gitignored: fetched data, run outputs, one-off scripts the experiment docs cite |
+| `paper/`                   | The order-marginalizing article: `main.tex`, `build.sh` (tables, figures, HTML, PDF)  |
 
 ## Commands
 
@@ -56,7 +57,7 @@ python3 -m unittest discover -s tests                    # unit tests
 scripts/fetch-model.sh DIR [MODEL]                       # get a pinned model (default qwen3.5-4b)
 scripts/benchmark.py timing http://127.0.0.1:8080        # also accuracy, articles, phases
 scripts/evaluate.py score http://127.0.0.1:8080 DIR      # after `evaluate.py fetch DIR`; also shifts, fit
-scripts/perturb.py run http://127.0.0.1:8080 DIR --out R.jsonl   # order-permutation experiment; then analyze, h2
+scripts/perturb.py run http://127.0.0.1:8080 DIR --out R.jsonl   # order-permutation experiment; then analyze, h2 (--budget fixed for the paper)
 ```
 
 Runtime requirement: `llama-server` from llama.cpp on `PATH`, or passed with `--llama-server`. The README's
@@ -81,8 +82,8 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - [agent_docs/experiments/related-work.md](agent_docs/experiments/related-work.md): prior work on option
   order, first-token readout, calibration, consistency as uncertainty and human label variation, and what
   the experiment adds.
-- [agent_docs/experiments/paper-outline.md](agent_docs/experiments/paper-outline.md): the paper drafted
-  from the experiment: sections, every figure and table with its data file, and the arms still to run.
+- [agent_docs/experiments/paper-outline.md](agent_docs/experiments/paper-outline.md): the outline the article in `paper/` was written
+  from: sections, every figure and table with its data file, and the arms still to run.
 - [agent_docs/experiments/noul-framing.md](agent_docs/experiments/noul-framing.md): plan to measure how a
   noul should be framed (the criteria fold against a yes/no choice), triggered by JevBench's public nouls.
 - [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps, plus the readout,

@@ -18,7 +18,7 @@ information beyond the averaged confidence; but a decision that changes under an
 ## Contributions
 
 1. A measurement of order sensitivity on runtime-defined decisions: 24 to 60% of decisions change under
-   some order across five models; sensitivity tracks the confusability of the options, not their number.
+   some order across seven models, 3B to 30B; sensitivity tracks the confusability of the options, not their number.
 2. Permutation marginalization evaluated against both single labels and 100-annotator label distributions:
    8 to 22% fewer errors, +0.02 to +0.05 error-detection AUROC, 13 to 43% closer to human distributions.
 3. A null: permutation spread adds -0.004 to +0.003 AUROC beyond the averaged confidence, a per-item test of
@@ -76,7 +76,7 @@ cheaper comparison.
 ### 6. Disagreement is not an uncertainty score (Table 4)
 
 H1 as pre-registered: held-out logistic combination, leave-one-source-out, paired bootstrap within source.
-Five models, all near zero. The margin variant (+0.011 on the 2B) reported and dismissed as a few
+Seven models, all within a few thousandths of zero. The margin variant (+0.011 on the 2B) reported and dismissed as a few
 thousandths. Relate to Guda et al.'s bias metric.
 
 ### 7. Boundary crossing is (Figure 1, Table 5)
@@ -94,7 +94,8 @@ and the helper; cite BaQCKV for the construction. TODO: the K-orders timing on t
 
 ### 9. Limitations
 
-Small models only; one readout (TODO arm: generated text); labels noisy in three sources, the ChaosNLI
+Models up to 30B (Muse Glimmer, run 2026-09-26, flips as much as the 4B); one readout, with the
+generated-text arm showing the same effects; labels noisy in three sources, the ChaosNLI
 subset as the defence; the flag is narrow on the best model (4% of confident answers) and broad on weak
 ones; the pilot's inflated 41% from the dataset's own order, as a cautionary note on reference orders.
 
@@ -133,7 +134,7 @@ count does not explain it (Table 2).
 
 ### Figure 3: what averaging does to the probabilities (ChaosNLI)
 
-Left: Jensen-Shannon distance to the 100-annotator distribution, base order against averaged, five models
+Left: Jensen-Shannon distance to the 100-annotator distribution, base order against averaged, seven models
 (paired dots with an arrow). Right: the same two conditions as a reliability-style plot, model probability
 of the human-majority label against human share, for the 4B. Data: `human-chaos.txt` per model
 (`local/results/perturb/`, `local/results/perturb/models/`). TODO: check ChaosNLI's own base and
@@ -141,7 +142,7 @@ distance-against-divergence convention before adding BERT and RoBERTa reference 
 
 ### Figure 4: H1 as a forest plot
 
-Five models x two targets (base-order wrong, averaged wrong): the held-out AUROC gain of spread over the
+Seven models x two targets (base-order wrong, averaged wrong): the held-out AUROC gain of spread over the
 averaged confidence with 95% intervals, all within +-0.005 of zero. Beside it, for scale, the gain of the
 averaged confidence over the single-order confidence (+0.017 to +0.053). Data: `analyze` outputs.
 

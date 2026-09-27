@@ -268,31 +268,52 @@ agreement. An item is "contested" below when its majority label got under 60% of
   human distribution, not one label. Comparison with ChaosNLI's published model numbers is pending a check
   of their distance definition and base.
 
-### Cross-model runs (2026-09-25; Muse Glimmer 30B and gpt-oss-20b queued 2026-09-26)
+### Cross-model runs (2026-09-25; Muse Glimmer 30B and gpt-oss-20b added 2026-09-26)
 
 The other pinned models, same data and settings as Run 2, run in sequence on the box (`models.sh`, in
 `local/results/perturb/box/`; outputs and analyses in `local/results/perturb/models/`). Fixed-budget flip
 throughout: the base order and the same 6 random permutations for every question. Three model families.
 
-| Measure                                                     | Qwen3.5-4B          | Qwen3.5-2B          | Granite 4.2 3B      | Granite 4.0 H Tiny  | SmolLM3-3B          |
-|-------------------------------------------------------------|---------------------|---------------------|---------------------|---------------------|---------------------|
-| Wrong, base order                                           | 21.6%               | 34.8%               | 32.7%               | 34.7%               | 35.7%               |
-| Wrong after averaging over orders (relative change)         | 19.9% (-8%)         | 27.9% (-20%)        | 28.8% (-12%)        | 26.9% (-22%)        | 29.6% (-17%)        |
-| Answers that change under some order                        | 24.0%               | 58.4%               | 44.0%               | 59.7%               | 55.1%               |
-| Error-detection AUROC, single-order / averaged confidence   | 0.863 / 0.880       | 0.799 / 0.836       | 0.755 / 0.807       | 0.787 / 0.840       | 0.804 / 0.841       |
-| Spread AUROC                                                | 0.866               | 0.827               | 0.804               | 0.816               | 0.823               |
-| Candidate mass AUROC                                        | 0.828               | 0.725               | 0.566               | 0.679               | 0.741               |
-| H1: spread added to averaged confidence, held-out AUROC gain | -0.002 [-0.002, -0.001] | -0.000 [-0.002, +0.001] | +0.003 [+0.001, +0.005] | -0.004 [-0.005, -0.002] | -0.002 [-0.004, -0.000] |
-| Confident answers (0.9+) that flip                          | 175 of 4,516 (4%)   | 1,084 of 3,310 (33%) | 2,193 of 5,972 (37%) | 1,809 of 4,160 (43%) | 1,119 of 3,668 (31%) |
-| Wrong: flipped / stable                                     | 27.4% / 5.5%        | 29.1% / 5.5%        | 51.3% / 13.6%       | 34.5% / 6.3%        | 34.8% / 6.8%        |
-| Adjusted risk ratio (spline of confidence + source)         | 2.66 [1.93, 3.47]   | 2.82 [2.35, 3.49]   | 1.80 [1.64, 1.97]   | 3.48 [2.95, 4.25]   | 3.40 [2.82, 4.00]   |
-| Adjusted risk difference                                    | +0.094              | +0.132              | +0.160              | +0.210              | +0.195              |
-| Mantel-Haenszel OR over source x confidence decile          | 3.84 [2.52, 5.85]   | 4.19 [3.22, 5.45]   | 2.46 [2.10, 2.87]   | 6.13 [4.86, 7.72]   | 4.97 [3.94, 6.27]   |
-| Per-source MH OR, sources with 10+ flips                    | 2.1 to 8.8 (6)      | 2.4 to 8.9 (7)      | 2.6 to 14.6 (7 of 8); MNLI 0.59 | 2.7 to 17.6 (8 of 8) | 2.0 to 15.9 (8 of 8) |
-| ChaosNLI: distance to human distribution, base / averaged   | 0.164 / 0.142       | 0.211 / 0.120       | 0.341 / 0.242       | 0.160 / 0.108       | 0.194 / 0.118       |
-| ChaosNLI, 80%+ human agreement: flipped / stable wrong      | 2 of 5 / 8 of 140   | 39.2% (51) / 17.2% (29) | 61% (132) / 55% (103), at chance on NLI | 16.7% (24) / 10.3% (78) | 12.1% (58) / 7.1% (28) |
+| Measure                                                     | Qwen3.5-4B          | Qwen3.5-2B          | Granite 4.2 3B      | Granite 4.0 H Tiny  | SmolLM3-3B          | Muse Glimmer 30B       | gpt-oss-20b            |
+|-------------------------------------------------------------|---------------------|---------------------|---------------------|---------------------|---------------------|------------------------|------------------------|
+| Wrong, base order                                           | 21.6%               | 34.8%               | 32.7%               | 34.7%               | 35.7%               | 21.5%                  | 25.8%                  |
+| Wrong after averaging over orders (relative change)         | 19.9% (-8%)         | 27.9% (-20%)        | 28.8% (-12%)        | 26.9% (-22%)        | 29.6% (-17%)        | 19.6% (-9%)            | 24.6% (-5%)            |
+| Answers that change under some order                        | 24.0%               | 58.4%               | 44.0%               | 59.7%               | 55.1%               | 27.0%                  | 29.0%                  |
+| Error-detection AUROC, single-order / averaged confidence   | 0.863 / 0.880       | 0.799 / 0.836       | 0.755 / 0.807       | 0.787 / 0.840       | 0.804 / 0.841       | 0.832 / 0.875          | 0.836 / 0.847          |
+| Spread AUROC                                                | 0.866               | 0.827               | 0.804               | 0.816               | 0.823               | 0.867                  | 0.832                  |
+| Candidate mass AUROC                                        | 0.828               | 0.725               | 0.566               | 0.679               | 0.741               | 0.540                  | 0.792                  |
+| H1: spread added to averaged confidence, held-out AUROC gain | -0.002 [-0.002, -0.001] | -0.000 [-0.002, +0.001] | +0.003 [+0.001, +0.005] | -0.004 [-0.005, -0.002] | -0.002 [-0.004, -0.000] | +0.000 [-0.001, +0.002] | -0.004 [-0.006, -0.002] |
+| Confident answers (0.9+) that flip                          | 175 of 4,516 (4%)   | 1,084 of 3,310 (33%) | 2,193 of 5,972 (37%) | 1,809 of 4,160 (43%) | 1,119 of 3,668 (31%) | 112 of 3,131 (4%)      | 823 of 5,400 (15%)     |
+| Wrong: flipped / stable                                     | 27.4% / 5.5%        | 29.1% / 5.5%        | 51.3% / 13.6%       | 34.5% / 6.3%        | 34.8% / 6.8%        | 30.4% / 3.5%           | 41.7% / 11.9%          |
+| Adjusted risk ratio (spline of confidence + source)         | 2.66 [1.93, 3.47]   | 2.82 [2.35, 3.49]   | 1.80 [1.64, 1.97]   | 3.48 [2.95, 4.25]   | 3.40 [2.82, 4.00]   | 4.05 [2.74, 5.82]      | 1.89 [1.65, 2.14]      |
+| Adjusted risk difference                                    | +0.094              | +0.132              | +0.160              | +0.210              | +0.195              | +0.114                 | +0.121                 |
+| Mantel-Haenszel OR over source x confidence decile          | 3.84 [2.52, 5.85]   | 4.19 [3.22, 5.45]   | 2.46 [2.10, 2.87]   | 6.13 [4.86, 7.72]   | 4.97 [3.94, 6.27]   | 4.69 [2.73, 8.06]      | 2.79 [2.26, 3.44]      |
+| Per-source MH OR, sources with 10+ flips                    | 2.1 to 8.8 (6)      | 2.4 to 8.9 (7)      | 2.6 to 14.6 (7 of 8); MNLI 0.59 | 2.7 to 17.6 (8 of 8) | 2.0 to 15.9 (8 of 8) | 1.1 to 21 (4 of 4); GoEmotions 1.08 | 1.9 to 9.8 (9 of 10); MNLI 0.82 |
+| ChaosNLI: distance to human distribution, base / averaged   | 0.164 / 0.142       | 0.211 / 0.120       | 0.341 / 0.242       | 0.160 / 0.108       | 0.194 / 0.118       | 0.148 / 0.092          | 0.340 / 0.318          |
+| ChaosNLI, 80%+ human agreement: flipped / stable wrong      | 2 of 5 / 8 of 140   | 39.2% (51) / 17.2% (29) | 61% (132) / 55% (103), at chance on NLI | 16.7% (24) / 10.3% (78) | 12.1% (58) / 7.1% (28) | 41.2% (17) / 3.3% (90) | 74% (19) / 72% (192), at chance on NLI |
 
-- All three results hold on every model: averaging removes 8 to 22% of errors and adds 0.02 to 0.05 AUROC;
+- Muse Glimmer 30B (Q4_K_M, the largest pinned model, run 2026-09-26 with the fixed budget only, 7,705 s):
+  seven times the 4B's parameters and the same accuracy (21.5% against 21.6% wrong), differently spread
+  (better on the intent sets, DBpedia and SemIf's evidence questions, worse on AG News, MNLI and rule
+  application), and no more order-stable: 27% of answers change under some order, 31% on MNLI against the
+  4B's 13%. Averaging removes 9% of its errors, spread adds nothing, and its confident flips are wrong 9
+  times as often as its stable confident answers, the largest ratio seen, because it is confident on only
+  45% of answers and those are rarely wrong. Its candidate mass says nothing (AUROC 0.54, median 0.67): it
+  leaks a third of its mass off the letters on every question. On ChaosNLI averaging takes it from 0.148 to
+  0.092 bits from the human distribution, the closest of any model, and on items 80% or more of 100 humans
+  agree on its confident flips are wrong 41% of the time against 3% for stable ones. The "small models only"
+  caveat is closed
+  in the direction that strengthens the claim: order sensitivity does not go away with size.
+- gpt-oss-20b (OpenAI, 21B total with about 4B active, MXFP4, run 2026-09-26 with the fixed budget; its
+  reasoning suppressed by the profile's final-channel header): the strongest of all on routing (Banking77
+  16.3% wrong against the 4B's 23.4%) and the weakest on anything that needs a chain of reading (MNLI 51.6%
+  against 17.1%, SemIf's evidence and rule questions 38 to 46% against 10%), the price of no reasoning. The
+  most overconfident model seen: 78% of its answers at 0.9 or above, and those wrong 11.9% of the time when
+  stable. The three results hold (averaging -5%, spread -0.004, confident flips wrong 3.5 times as often,
+  adjusted risk ratio 1.89); MNLI, where it is at chance, again inverts the flag (odds ratio 0.82), and its
+  ChaosNLI numbers say nothing for the same reason.
+- All three results hold on every model (seven, five families, 3B to 30B): averaging removes 5 to 22% of errors
+  and adds 0.01 to 0.05 AUROC;
   spread adds between -0.004 and +0.003 AUROC beyond the averaged confidence; a confident answer that
   flips is wrong 1.8 to 3.5 times as often as a stable one after adjustment, with every per-source odds
   ratio above 1 except Granite 4.2 on MNLI.
@@ -405,6 +426,60 @@ By the generated first token's probability, wrong-answer rate stable / flipped (
 - Cost: generation took 3,689 s for the bare prompt and 7,067 s for the text prompt on 8 parallel slots,
   against about 95 minutes for the readout over 3 times as many orders through llama-server, and far less
   through the helper.
+
+### Budget correction (2026-09-27)
+
+A review of the paper draft found that every averaged-answer, spread and
+Jensen-Shannon number above was computed over every order asked, rotations included: up to 18 orders for a
+12-option question and 6 for a 3-option one, with a rotation that repeats a sampled permutation counted twice
+(1,891 of 6,992 records on the five rotation-bearing runs). Only `changes_fixed` and the H2 analyses used the
+fixed budget the write-up claimed. `perturb.py --budget fixed` now restricts the averaged answer, the spread
+and `changes` to the base order and the random permutations (at most 7 distinct orders; all distinct orders
+for two- and three-option questions), and the paper's numbers are recomputed with it
+(`local/results/perturb/fixed/`, `recompute.sh` there). The default stays `all`, so the outputs above still
+reproduce. The quantity `human` reports was also mislabelled: it is the Jensen-Shannon divergence in bits,
+not its square root, the distance; the label now says divergence.
+
+Fixed-budget results, the base-order numbers unchanged:
+
+| Wrong: base / averaged (change)           | Qwen3.5-4B          | Qwen3.5-2B          | Granite 4.2 3B      | Granite Tiny        | SmolLM3-3B          | Muse Glimmer 30B    | gpt-oss-20b         |
+|-------------------------------------------|---------------------|---------------------|---------------------|---------------------|---------------------|---------------------|---------------------|
+| All orders (above)                        | 21.6 / 19.9% (-8%)  | 34.8 / 27.9% (-20%) | 32.7 / 28.8% (-12%) | 34.7 / 26.9% (-22%) | 35.7 / 29.6% (-17%) | 21.5 / 19.6% (-9%)  | 25.8 / 24.6% (-5%)  |
+| Fixed budget                              | 21.6 / 19.9% (-8%)  | 34.8 / 28.6% (-18%) | 32.7 / 29.0% (-11%) | 34.7 / 27.5% (-21%) | 35.7 / 30.2% (-15%) | 21.5 / 19.6% (-9%)  | 25.8 / 24.6% (-5%)  |
+| AUROC for a wrong base answer: conf / conf_avg | 0.863 / 0.880  | 0.799 / 0.839       | 0.755 / 0.811       | 0.787 / 0.839       | 0.804 / 0.844       | 0.832 / 0.875       | 0.836 / 0.847       |
+| AUROC for a wrong averaged answer: conf_avg / spread | 0.867 / 0.849 | 0.823 / 0.800    | 0.786 / 0.782       | 0.825 / 0.784       | 0.818 / 0.788       | 0.862 / 0.849       | 0.838 / 0.818       |
+| H1 gain, wrong averaged answer, conf_avg + spread | -0.0018 [-0.0023, -0.0013] | -0.0017 [-0.0022, -0.0012] | +0.0007 [-0.0008, +0.0022] | -0.0032 [-0.0040, -0.0024] | -0.0024 [-0.0033, -0.0014] | -0.0013 [-0.0019, -0.0007] | -0.0034 [-0.0051, -0.0018] |
+
+- The conclusions stand. Averaging removes 5 to 21% of errors (was 5 to 22%), the averaged confidence beats
+  the single order's by 0.01 to 0.05 AUROC against the base answer's errors, and spread adds -0.004 to
+  +0.001 against the averaged answer's own errors, the target a deployed averaging system cares about (the
+  paper now reports that target; against the base answer's errors the range is -0.004 to +0.002).
+- Muse and gpt-oss were run once per question (`--repeats 1`), so their noise floor is not measured; the
+  write-up above that lists five repeat-free models was wrong on those two. Of the five repeated models,
+  three change no answer on repeat and Granite 4.2 3B and SmolLM3-3B change 0.5 to 0.6% (mean spread 0.002
+  to 0.003).
+- Figure 1 of the paper now includes the band below 0.5 (603 4B answers, 947 2B answers were off the plot).
+- A second review asked for the flip to get the same incremental test as the spread. `analyze` now prints
+  it, with the error rate and coverage of abstaining on confident flips. Added to the base-order confidence
+  for ranking the base-order answer's errors, the flip gains held-out AUROC +0.0035 [-0.0005, +0.0077] on the
+  4B, +0.03 on Muse and gpt-oss, +0.06 to +0.21 on the four small models; abstaining on flipped confident
+  answers lowers the error among the kept from 6.3% to 5.5% at 96% coverage (4B), 4.5% to 3.5% at 96% (Muse),
+  13 to 27% down to 5.5 to 13.6% at 57 to 70% (small models). Added to the averaged confidence for ranking the
+  averaged answer's errors, it gains nothing (-0.009 to -0.001): once the orders are averaged, the averaged
+  confidence carries what the flip carries. The paper now says so; the flag is for a system that keeps the
+  base-order answer. `analyze` and `human` also print paired bootstrap intervals for the error-rate and
+  divergence changes from averaging; every interval is below zero on every model.
+
+### Flip-effect sensitivity (2026-09-27)
+
+`perturb.py h2 --confident C` refits the adjusted model at another cutoff and `--interaction` adds flip x
+spline terms so the flip's effect may vary with confidence. Fixed budget, 100 resamples, outputs in
+`local/results/perturb/fixed/sens/`. Adjusted risk ratios at 0.8 / 0.9 / 0.95 / interaction at 0.9: Qwen3.5-4B
+2.29 / 2.66 / 2.53 / 1.99; Muse 3.47 / 4.05 / 6.75 / 4.67; gpt-oss 1.70 / 1.89 / 2.16 / 2.25; Granite 4.2 3B
+1.83 / 1.80 / 1.82 / 1.77; Granite Tiny 3.33 / 3.48 / 3.55 / 3.44; SmolLM3 3.18 / 3.40 / 3.69 / 3.35; Qwen 2B
+2.73 / 2.82 / 2.77 / 2.79. Every interval above 1; the 0.9 cutoff was fixed in the plan above before Run 2.
+The llama.cpp commit the boxes built was not recorded (shallow fetch of main on the run day); `remote-gpu.sh`
+now prints it.
 
 ## Open
 

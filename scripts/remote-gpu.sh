@@ -88,6 +88,8 @@ if ! "$server" --version >/dev/null 2>&1; then
   fi
   cmake --build /root/llama.cpp/build -j "$jobs" --target llama-server
 fi
+# Record the backend build with the run: results are only reproducible against the same llama.cpp commit.
+echo "llama.cpp commit: $(git -C /root/llama.cpp rev-parse HEAD 2>/dev/null || echo unknown)"
 
 if [[ -n "$NATIVE" ]]; then
   # Built here against this llama.cpp: the helper uses its C API, so both must come from one version.

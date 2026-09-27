@@ -1,0 +1,8 @@
+model	base	averaged
+qwen4b	0.164	0.142
+qwen2b	0.211	0.12
+granite3b	0.341	0.24
+granitetiny	0.16	0.107
+smollm3	0.194	0.117
+gptoss	0.34	0.318
+muse	0.148	0.092

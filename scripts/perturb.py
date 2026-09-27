@@ -151,13 +151,26 @@ def _changes(vectors: list[list[float]]) -> float:
     return 1 - max(picks.count(pick) for pick in set(picks)) / len(picks)
 
 
+# Which orders the averaged answer, the spread and `changes` are computed over. "all": every order asked, the
+# rotations included, so a 12-option question is averaged over up to 18 orders and a 3-option one over 6, and a
+# rotation that repeats a sampled permutation counts twice. "fixed": the base order and the random permutations
+# only, at most 7 distinct orders for every question (all of them when a question has fewer). The paper uses
+# "fixed"; `changes_fixed` is that flip test whichever budget is set.
+BUDGET = "all"
+
+
+def _family(record: dict) -> list[dict]:
+    kinds = ("perm",) if BUDGET == "fixed" else ("perm", "rotation")
+    return [a for a in record["answers"] if a["kind"] in kinds]
+
+
 def features(record: dict) -> dict:
     keys = sorted(record["answers"][0]["probs"])
     base = [a for a in record["answers"] if a["kind"] == "repeat"]
     reworded = [a for a in record["answers"] if a["kind"].startswith("reword:")]
-    permuted = [a for a in record["answers"] if a["kind"] != "repeat" and not a["kind"].startswith("reword:")]
+    permuted = _family(record)
     first = _vector(base[0]["probs"], keys)
-    family = [first] + [_vector(a["probs"], keys) for a in permuted]  # every distinct order, base included
+    family = [first] + [_vector(a["probs"], keys) for a in permuted]  # the budget's orders, base included
     mean = [statistics.fmean(column) for column in zip(*family)]
     top, runner = sorted(first, reverse=True)[:2]
     mtop, mrunner = sorted(mean, reverse=True)[:2]
@@ -166,6 +179,8 @@ def features(record: dict) -> dict:
     return {
         "id": record["id"], "source": record["source"], "options": len(keys),
         "wrong": _argmax(first) != label, "wrong_avg": _argmax(mean) != label,
+        # the random-single-order baseline: the error rate over every order of the budget, base included
+        "wrong_mean": statistics.fmean(_argmax(v) != label for v in family),
         "conf": top, "margin": top - runner, "entropy": -sum(p * math.log(p) for p in first if p > 0),
         "mass": masses[0] if masses else None,
         "conf_avg": mtop, "margin_avg": mtop - mrunner,
@@ -207,6 +222,7 @@ SIGNALS = {
     "1-mass": lambda f: -(f["mass"] if f["mass"] is not None else 1.0),
     "1-conf_avg": lambda f: -f["conf_avg"], "-margin_avg": lambda f: -f["margin_avg"],
     "spread": lambda f: f["spread"], "changes": lambda f: f["changes"],
+    "flip": lambda f: float(f["changes_fixed"] > 0),
 }
 
 
@@ -287,6 +303,18 @@ def bootstrap_gain(rows: list[dict], target: str, base: str, added: str) -> tupl
     return point, gains[int(0.025 * len(gains))], gains[int(0.975 * len(gains)) - 1]
 
 
+def paired_change(rows: list[dict], before: str, after: str) -> tuple[float, float, float]:
+    """Relative change of the mean of `after` against the mean of `before` over the same questions, with a 95%
+    bootstrap interval over questions, stratified by source."""
+    by_source: dict[str, list[dict]] = {}
+    for row in rows:
+        by_source.setdefault(row["source"], []).append(row)
+    change = lambda sample: statistics.fmean(r[after] for r in sample) / statistics.fmean(r[before] for r in sample) - 1
+    rng = random.Random(0)
+    draws = sorted(change([rng.choice(group) for group in by_source.values() for _ in group]) for _ in range(1000))
+    return change(rows), draws[int(0.025 * len(draws))], draws[int(0.975 * len(draws)) - 1]
+
+
 def fixed_order(record: dict) -> bool:
     """True when every variant reaches the model in the same displayed order: a single-letter key is shown at
     its own letter (llav's `_align_letters`), so such questions cannot be permuted."""
@@ -325,11 +353,25 @@ def analyze(args) -> None:
                 f"{auroc([signal(r) for r in group], wrong):11.3f}" for signal in SIGNALS.values()))
         print()
 
+    point, low, high = paired_change(rows, "wrong", "wrong_avg")
+    print(f"averaging: wrong-answer rate {statistics.fmean(r['wrong'] for r in rows):.4f} -> "
+          f"{statistics.fmean(r['wrong_avg'] for r in rows):.4f}, relative change {point:+.1%} [{low:+.1%}, {high:+.1%}] "
+          f"(paired bootstrap over questions); mean single-order wrong-answer rate "
+          f"{statistics.fmean(r['wrong_mean'] for r in rows):.4f}\n")
     print("H1: does spread add to the averaged answer's confidence? held-out AUROC gain, 95% bootstrap")
     for target in ("wrong", "wrong_avg"):
         for base in ("1-conf_avg", "-margin_avg"):
             point, low, high = bootstrap_gain(rows, target, base, "spread")
             print(f"  {target:10} {base:12} + spread: {point:+.4f}  [{low:+.4f}, {high:+.4f}]")
+    print()
+    print("Flip flag: does a fixed-budget flip add to confidence? held-out AUROC gain, 95% bootstrap")
+    for target, base in (("wrong", "1-conf"), ("wrong_avg", "1-conf_avg")):
+        point, low, high = bootstrap_gain(rows, target, base, "flip")
+        print(f"  {target:10} {base:12} + flip: {point:+.4f}  [{low:+.4f}, {high:+.4f}]")
+    confident = [r for r in rows if r["conf"] >= CONFIDENT]
+    kept = [r for r in confident if r["changes_fixed"] == 0]
+    print(f"  abstaining on flipped confident answers: confident {len(confident)} wrong {statistics.fmean(r['wrong'] for r in confident):.4f}; "
+          f"kept {len(kept)} ({len(kept) / len(confident):.1%}) wrong {statistics.fmean(r['wrong'] for r in kept):.4f}")
     print()
 
     with_reword = [r for r in rows if r["changes_reword"] is not None]
@@ -388,10 +430,16 @@ def _quantile(values: list[float], q: float) -> float:
     return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
 
 
-def _design(rows: list[dict], flip: str, sources: list[str], knots: list[float]) -> list[list[float]]:
+def _design(rows: list[dict], flip: str, sources: list[str], knots: list[float], interaction: bool = False,
+            force: float | None = None) -> list[list[float]]:
+    """Spline of logit confidence, the flip, optionally flip x spline (a flip effect that varies with
+    confidence), and source. `force` sets every row's flip to that value, for standardization."""
     spline = _spline([_logit(r["conf"]) for r in rows], knots)
-    return [basis + [float(r[flip] > 0)] + [float(r["source"] == s) for s in sources[1:]]
-            for basis, r in zip(spline, rows)]
+    out = []
+    for basis, r in zip(spline, rows):
+        f = float(r[flip] > 0) if force is None else force
+        out.append(basis + [f] + ([f * b for b in basis] if interaction else []) + [float(r["source"] == s) for s in sources[1:]])
+    return out
 
 
 def _predict(w: list[float], row: list[float]) -> float:
@@ -399,15 +447,16 @@ def _predict(w: list[float], row: list[float]) -> float:
     return 1 / (1 + math.exp(-max(-30.0, min(30.0, z))))
 
 
-def adjusted_effect(rows: list[dict], flip: str, knots: list[float]) -> tuple[float, float, float]:
-    """Log-odds of the flip term, and the marginal risk ratio and difference by standardization: every
-    answer predicted as flipped and as stable, averaged."""
+def adjusted_effect(rows: list[dict], flip: str, knots: list[float], interaction: bool = False) -> tuple[float, float, float]:
+    """Log-odds of the flip term (its main effect, at the spline's zero, when interaction terms are in), and
+    the marginal risk ratio and difference by standardization: every answer predicted as flipped and as
+    stable, averaged."""
     sources = sorted({r["source"] for r in rows})
-    x = _design(rows, flip, sources, knots)
+    x = _design(rows, flip, sources, knots, interaction)
     w = logistic(x, [r["wrong"] for r in rows])
     at = len(knots) - 1  # index of the flip column in a design row
-    flipped = statistics.fmean(_predict(w, row[:at] + [1.0] + row[at + 1:]) for row in x)
-    stable = statistics.fmean(_predict(w, row[:at] + [0.0] + row[at + 1:]) for row in x)
+    flipped = statistics.fmean(_predict(w, row) for row in _design(rows, flip, sources, knots, interaction, 1.0))
+    stable = statistics.fmean(_predict(w, row) for row in _design(rows, flip, sources, knots, interaction, 0.0))
     return w[1 + at], flipped / stable, flipped - stable
 
 
@@ -441,11 +490,12 @@ def mantel_haenszel(rows: list[dict], flip: str, strata) -> tuple[float, float, 
 def h2(args) -> None:
     records = [json.loads(line) for path in args.files for line in Path(path).read_text().splitlines() if line.strip()]
     rows = [features(r) for r in records if not fixed_order(r)]
-    confident = [r for r in rows if r["conf"] >= CONFIDENT]
+    cutoff = args.confident
+    confident = [r for r in rows if r["conf"] >= cutoff]
     logits = [_logit(r["conf"]) for r in confident]
     knots = [_quantile(logits, q) for q in (0.05, 0.35, 0.65, 0.95)]
-    print(f"{len(confident)} base-order answers with confidence >= {CONFIDENT}; spline knots on logit(confidence) "
-          + ", ".join(f"{k:.2f}" for k in knots) + "\n")
+    print(f"{len(confident)} base-order answers with confidence >= {cutoff}; spline knots on logit(confidence) "
+          + ", ".join(f"{k:.2f}" for k in knots) + (" ; flip x spline interaction" if args.interaction else "") + "\n")
     for flip, title in (("changes", "flip across every order"),
                         ("changes_fixed", "flip across base + random permutations")):
         flipped = [r for r in confident if r[flip] > 0]
@@ -454,7 +504,7 @@ def h2(args) -> None:
         raw_s = sum(r["wrong"] for r in stable) / len(stable)
         print(f"{title}: flipped {len(flipped)} ({raw_f:.1%} wrong), stable {len(stable)} ({raw_s:.1%} wrong), "
               f"raw risk ratio {raw_f / raw_s:.2f}")
-        beta, ratio, diff = adjusted_effect(confident, flip, knots)
+        beta, ratio, diff = adjusted_effect(confident, flip, knots, args.interaction)
         rng = random.Random(0)
         by_source: dict = {}
         for r in confident:
@@ -462,7 +512,7 @@ def h2(args) -> None:
         boots = []
         for _ in range(args.bootstrap):
             sample = [rng.choice(group) for group in by_source.values() for _ in group]
-            boots.append(adjusted_effect(sample, flip, knots))
+            boots.append(adjusted_effect(sample, flip, knots, args.interaction))
         interval = lambda values: (sorted(values)[int(0.025 * len(values))],
                                    sorted(values)[int(0.975 * len(values)) - 1])
         (ol, oh), (rl, rh), (dl, dh) = (interval([math.exp(b[0]) for b in boots]), interval([b[1] for b in boots]),
@@ -478,7 +528,7 @@ def h2(args) -> None:
         loso = []
         for source in sorted(by_source):
             rest = [r for r in confident if r["source"] != source]
-            b, ratio_rest, _ = adjusted_effect(rest, flip, knots)
+            b, ratio_rest, _ = adjusted_effect(rest, flip, knots, args.interaction)
             loso.append((source, math.exp(b), ratio_rest))
         print("  leave one source out, adjusted odds ratio / risk ratio: "
               + ", ".join(f"-{s} {o:.2f}/{rr:.2f}" for s, o, rr in loso))
@@ -548,7 +598,7 @@ def human(args) -> None:
         # Human share of the gold label and of the model's answers; human distribution over the options.
         row["gold_share"] = _share(human_counts, record["label"])
         base = record["answers"][0]["probs"]
-        family = [base] + [a["probs"] for a in record["answers"] if a["kind"] != "repeat"]
+        family = [base] + [a["probs"] for a in _family(record)]
         mean = {k: statistics.fmean(p[k] for p in family) for k in keys}
         row["base_share"] = _share(human_counts, max(base, key=base.get))
         row["avg_share"] = _share(human_counts, max(mean, key=mean.get))
@@ -557,6 +607,7 @@ def human(args) -> None:
             h = [human_counts["counts"].get(k, 0) / total for k in keys]
             row["jsd_base"] = _jsd([base[k] for k in keys], h)
             row["jsd_avg"] = _jsd([mean[k] for k in keys], h)
+            row["jsd_mean"] = statistics.fmean(_jsd([p[k] for k in keys], h) for p in family)
         rows.append(row)
 
     for source in sorted({r["source"] for r in rows}):
@@ -596,7 +647,10 @@ def human(args) -> None:
         if with_jsd:
             jsd_base = statistics.fmean(r["jsd_base"] for r in with_jsd)
             jsd_avg = statistics.fmean(r["jsd_avg"] for r in with_jsd)
-            print(f"  distance to the human distribution (Jensen-Shannon, bits): base order {jsd_base:.3f}, "
+            point, low, high = paired_change(with_jsd, "jsd_base", "jsd_avg")
+            print(f"  divergence change from averaging: {point:+.1%} [{low:+.1%}, {high:+.1%}] (paired bootstrap over items); "
+                  f"mean single-order divergence {statistics.fmean(r['jsd_mean'] for r in with_jsd):.3f}")
+            print(f"  divergence from the human distribution (Jensen-Shannon, bits): base order {jsd_base:.3f}, "
                   f"averaged over orders {jsd_avg:.3f}; "
                   f"human share of the answer: base {statistics.fmean(r['base_share'] for r in group):.3f}, "
                   f"averaged {statistics.fmean(r['avg_share'] for r in group):.3f}")
@@ -928,7 +982,11 @@ def nofit_analyze(args) -> None:
 
 
 def main(argv=None) -> None:
+    global BUDGET
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--budget", choices=("all", "fixed"), default=BUDGET,
+                        help="Orders behind the averaged answer and the spread: every order asked, or the base "
+                             "order and the random permutations only (see BUDGET)")
     commands = parser.add_subparsers(dest="command", required=True)
     command = commands.add_parser("run", help="Ask every choice question in several option orders")
     command.add_argument("url", help="llav base URL, for example http://127.0.0.1:8080")
@@ -946,6 +1004,9 @@ def main(argv=None) -> None:
     command = commands.add_parser("h2", help="Flip effect on confident answers, adjusted for confidence and source")
     command.add_argument("files", nargs="+", help="JSONL written by run")
     command.add_argument("--bootstrap", type=int, default=200, help="Resamples for the adjusted intervals")
+    command.add_argument("--confident", type=float, default=CONFIDENT, help="Confidence cutoff for the subgroup")
+    command.add_argument("--interaction", action="store_true",
+                         help="Let the flip effect vary with confidence (flip x spline terms), a sensitivity check")
     command.set_defaults(run=h2)
     command = commands.add_parser("human", help="Flips and averaging against human label distributions")
     command.add_argument("files", nargs="+", help="JSONL written by run")
@@ -988,6 +1049,7 @@ def main(argv=None) -> None:
     command.add_argument("files", nargs="+", help="JSONL written by run")
     command.set_defaults(run=analyze)
     args = parser.parse_args(argv)
+    BUDGET = args.budget
     args.run(args)
 
 

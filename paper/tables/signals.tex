@@ -1,0 +1,30 @@
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+ & Qwen 4B & Muse 30B & gpt-oss 20B & Granite 3B & Granite Tiny & SmolLM3 3B & Qwen 2B \\
+\midrule
+\multicolumn{8}{@{}l}{AUROC for a wrong base-order answer} \\
+\quad base-order confidence & 0.863 & 0.832 & 0.836 & 0.755 & 0.787 & 0.804 & 0.799 \\
+\quad averaged confidence & 0.880 & 0.875 & 0.847 & 0.811 & 0.839 & 0.844 & 0.839 \\
+\quad spread & 0.866 & 0.867 & 0.832 & 0.809 & 0.815 & 0.827 & 0.825 \\
+\quad flip & 0.777 & 0.797 & 0.731 & 0.764 & 0.820 & 0.825 & 0.818 \\
+\quad candidate mass & 0.828 & 0.540 & 0.792 & 0.566 & 0.679 & 0.741 & 0.725 \\
+\quad spread added, held-out gain & $-0.0017$ & $+0.0002$ & $-0.0040$ & $+0.0020$ & $-0.0031$ & $-0.0012$ & $+0.0001$ \\
+\quad flip added, held-out gain & $+0.0035$ & $+0.0287$ & $+0.0340$ & $+0.2088$ & $+0.0757$ & $+0.0605$ & $+0.0572$ \\
+\multicolumn{8}{@{}l}{AUROC for a wrong averaged answer} \\
+\quad base-order confidence & 0.846 & 0.809 & 0.823 & 0.712 & 0.730 & 0.740 & 0.738 \\
+\quad averaged confidence & 0.867 & 0.862 & 0.838 & 0.786 & 0.825 & 0.818 & 0.823 \\
+\quad spread & 0.849 & 0.849 & 0.818 & 0.782 & 0.784 & 0.788 & 0.800 \\
+\quad spread added, held-out gain & $-0.0018$ & $-0.0013$ & $-0.0034$ & $+0.0007$ & $-0.0032$ & $-0.0024$ & $-0.0017$ \\
+\quad flip added, held-out gain & $+0.0035$ & $-0.0017$ & $-0.0047$ & $-0.0086$ & $-0.0019$ & $-0.0051$ & $-0.0013$ \\
+\midrule
+Answers at base-order confidence $\ge 0.9$ & 65\% & 45\% & 78\% & 86\% & 60\% & 53\% & 48\% \\
+\quad of which changing under some order & 4\% & 4\% & 15\% & 37\% & 43\% & 31\% & 33\% \\
+\quad wrong when changing & 27.4\% & 30.4\% & 41.7\% & 51.3\% & 34.5\% & 34.8\% & 29.1\% \\
+\quad wrong when stable & 5.5\% & 3.5\% & 11.9\% & 13.6\% & 6.3\% & 6.8\% & 5.5\% \\
+\quad wrong, all confident answers & 6.3\% & 4.5\% & 16.4\% & 27.4\% & 18.6\% & 15.3\% & 13.2\% \\
+Adjusted odds ratio & 3.39 & 5.87 & 3.06 & 2.83 & 5.72 & 5.09 & 4.23 \\
+Adjusted risk difference & $+0.094$ & $+0.114$ & $+0.121$ & $+0.160$ & $+0.210$ & $+0.195$ & $+0.132$ \\
+Mantel--Haenszel odds ratio & 3.84 & 4.69 & 2.79 & 2.46 & 6.13 & 4.97 & 4.19 \\
+\quad 95\% interval & 2.52--5.85 & 2.73--8.06 & 2.26--3.44 & 2.10--2.87 & 4.86--7.72 & 3.94--6.27 & 3.22--5.45 \\
+\bottomrule
+\end{tabular}
