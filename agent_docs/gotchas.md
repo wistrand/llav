@@ -149,6 +149,11 @@ The Space itself is a two-file repo, README front matter plus a Dockerfile that 
   and llav sees no key, or forwards it and llav sees the wrong one; both are a 401. Leave `LLAV_API_KEY`
   unset on a private Space and let the Hugging Face token be the access control. Set it only on a public
   or protected Space.
+- **Per-person access to a private Space is a fine-grained token, not a collaborator.** A personal account
+  cannot add collaborators (that needs an organization, and Docker Spaces there need a Team plan). A
+  fine-grained token scoped to read access on the Space's repo alone reaches the API at `*.hf.space`;
+  confirmed. One token per person, each revocable on its own. They all count as the owner on the Hugging
+  Face side, and they get the API only: the Space page's UI still needs a login as the owner.
 - **Hardware is not part of the Space; request it.** A new Space is on CPU basic until the hardware is
   set in Settings or through `POST /api/spaces/OWNER/NAME/hardware`; the setup script does so only when
   `HARDWARE` is given. Docker Spaces need a paid plan to create at all. Set a sleep time on paid hardware,
