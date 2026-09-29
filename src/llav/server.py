@@ -22,9 +22,14 @@ MAX_BODY = 8 * 1024 * 1024
 # Seconds a client may stall while sending a request or idling on keep-alive before its thread is freed.
 SOCKET_TIMEOUT = 60
 WEB_UI = Path(__file__).with_name("webui.html")
-# The page is self-contained: inline script and style, requests only back to llav.
-WEB_UI_POLICY = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
-                 "img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+
+def web_ui_policy(frame_ancestors: tuple[str, ...] | list[str] = ()) -> str:
+    """The page is self-contained: inline script and style, requests only back to llav. No site may frame it
+    unless the operator names the embedder (a Hugging Face Space shows the app inside huggingface.co)."""
+    ancestors = " ".join(frame_ancestors) or "'none'"
+    return ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
+            f"img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors {ancestors}")
 
 
 def _reject_constant(name: str):
@@ -44,7 +49,7 @@ class Server(ThreadingHTTPServer):
 class App:
     def __init__(self, engine: Engine, model_id: str, aliases: list[str], api_key: str | None,
                  backend: dict, health=lambda: True, web_ui: bytes | None = None,
-                 calibration: Calibration | None = None):
+                 calibration: Calibration | None = None, frame_ancestors: tuple[str, ...] | list[str] = ()):
         self.engine = engine
         self.model_id = model_id
         self.accepted = {model_id, *aliases}
@@ -53,6 +58,7 @@ class App:
         self.backend = backend
         self.health = health
         self.web_ui = web_ui
+        self.web_ui_policy = web_ui_policy(frame_ancestors)
         self.calibration = calibration
 
 
@@ -79,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(page)))
-        self.send_header("Content-Security-Policy", WEB_UI_POLICY)
+        self.send_header("Content-Security-Policy", self.app.web_ui_policy)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()

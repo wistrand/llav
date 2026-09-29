@@ -300,12 +300,14 @@ estimates for other hardware and what a text-generating baseline would cost are 
 ```
 llav --gguf FILE [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
      [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
-     [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
+     [--frame-ancestors ORIGIN ...] [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
 
 llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own llama-server
 ```
 
+The web UI refuses to be shown inside another site's frame; `--frame-ancestors ORIGIN` allows one, for
+example `--frame-ancestors https://huggingface.co` when llav runs in a Hugging Face Space.
 Pass llama.cpp flags through with `--llama-arg`, for example `--llama-arg=-dev --llama-arg=Vulkan0`. When
 attaching to your own server, start it with `--ctx-checkpoints 0 --slot-save-path DIR --swa-full --jinja`.
 

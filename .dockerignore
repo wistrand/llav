@@ -1,0 +1,5 @@
+# The image needs src/ and scripts/fetch-model.sh; everything else only slows the context upload.
+*
+!src
+!scripts/fetch-model.sh
+src/**/__pycache__

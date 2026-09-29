@@ -672,8 +672,9 @@ class OpenApiTest(unittest.TestCase):
 class ServerTest(unittest.TestCase):
     BODY = json.dumps(request({"a": {"type": "noul", "instructions": "q"}})).encode()
 
-    def serve(self, engine=None, api_key=None, timeout=None, web_ui=None) -> int:
-        app = App(engine or FakeEngine(), "llav-test", ["llav-latest"], api_key, {}, web_ui=web_ui)
+    def serve(self, engine=None, api_key=None, timeout=None, web_ui=None, frame_ancestors=()) -> int:
+        app = App(engine or FakeEngine(), "llav-test", ["llav-latest"], api_key, {}, web_ui=web_ui,
+                  frame_ancestors=frame_ancestors)
         overrides = {"app": app, "log_message": lambda *args: None}
         if timeout:
             overrides["timeout"] = timeout
@@ -734,7 +735,14 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(data, page)
         self.assertTrue(headers["content-type"].startswith("text/html"))
         self.assertIn("default-src 'none'", headers["content-security-policy"])
+        self.assertIn("frame-ancestors 'none'", headers["content-security-policy"])
         self.assertEqual(self.exchange(self.serve(), "GET / HTTP/1.1\nHost: x\n")[0], 404)
+
+    def test_frame_ancestors_name_the_sites_allowed_to_embed_the_web_ui(self):
+        port = self.serve(web_ui=WEB_UI.read_bytes(), frame_ancestors=["https://huggingface.co", "https://a.b"])
+        _, headers, _ = self.exchange(port, "GET / HTTP/1.1\nHost: x\n")
+        self.assertIn("frame-ancestors https://huggingface.co https://a.b", headers["content-security-policy"])
+        self.assertNotIn("'none'", headers["content-security-policy"].split("frame-ancestors")[1])
 
     def test_query_string_does_not_change_the_route(self):
         head = f"POST /v1/systemone?trace=1 HTTP/1.1\nHost: x\nContent-Length: {len(self.BODY)}\n"

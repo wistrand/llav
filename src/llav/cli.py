@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -53,6 +54,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-jev-alias", action="store_true",
                         help="Do not accept model 'jev-latest' as an alias (accepted by default for SDK compatibility)")
     parser.add_argument("--web-ui", action="store_true", help="Serve a browser UI for trying questions at /")
+    parser.add_argument("--frame-ancestors", action="append", default=[], metavar="ORIGIN",
+                        help="Let this origin embed the web UI in a frame, e.g. https://huggingface.co for a "
+                             "Hugging Face Space; repeatable (default: no site may frame it)")
     parser.add_argument("--queue-timeout", type=float, default=30, help="Seconds to wait for a free slot before 529")
     parser.add_argument("--native-readout", metavar="BIN",
                         help="Path to the llav-readout helper: answers every question of a request in one "
@@ -100,6 +104,12 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--state-cache must not be negative")
     if args.native_readout and not args.gguf:
         parser.error("--native-readout needs --gguf: the helper loads the model itself")
+    if args.frame_ancestors and not args.web_ui:
+        parser.error("--frame-ancestors needs --web-ui")
+    for origin in args.frame_ancestors:
+        # An origin only, so the value cannot carry further policy directives into the header.
+        if not re.fullmatch(r"https?://[A-Za-z0-9.*-]+(:\d+)?", origin):
+            parser.error(f"--frame-ancestors expects an origin such as https://example.com, not {origin!r}")
     if args.native_questions < 1:
         parser.error("--native-questions must be at least 1")
 
@@ -163,7 +173,8 @@ def main(argv: list[str] | None = None) -> None:
                    "template_profile": engine.profile.name, "assistant_prefix": engine.assistant_prefix,
                    "low_candidate_mass": engine.profile.low_mass}
         web_ui = WEB_UI.read_bytes() if args.web_ui else None
-        serve(httpd, App(engine, model_id, aliases, args.api_key, backend, health, web_ui, calibration))
+        serve(httpd, App(engine, model_id, aliases, args.api_key, backend, health, web_ui, calibration,
+                         frame_ancestors=args.frame_ancestors))
     except (CalibrationError, EngineError, NativeError, RuntimeError, OSError) as error:
         sys.stderr.write(f"llav: {error}\n")
         sys.exit(1)
