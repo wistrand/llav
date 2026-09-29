@@ -42,6 +42,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `scripts/orders-proxy.py`  | Research proxy: asks llav in several option orders and averages        |
 | `scripts/fetch-model.sh`   | Downloads a pinned GGUF (Qwen3.5-4B default) and checks SHA-256        |
 | `scripts/remote-gpu.sh`    | Starts llav on a rented CUDA box over SSH; NATIVE=1, TS_AUTHKEY=...    |
+| `Dockerfile`               | Container on llama.cpp's prebuilt CUDA image, laid out for a Space     |
 | `agent_docs/`              | Deep dives, linked below                                               |
 | `docs/`                    | GitHub Pages site (`index.html`) and README screenshots                |
 | `docs/demo/`               | Browser demo: `llav.js` ports `prompt.py` and `questions.py` to wllama |
@@ -88,7 +89,8 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - [agent_docs/experiments/noul-framing.md](agent_docs/experiments/noul-framing.md): plan to measure how a
   noul should be framed (the criteria fold against a yes/no choice), triggered by JevBench's public nouls.
 - [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps, plus the readout,
-  native-helper and calibration traps. Skim before touching llama-server flags, the readout, option
+  native-helper, calibration and container traps (Hugging Face Spaces, the prebuilt llama.cpp image).
+  Skim before touching llama-server flags, the readout, option
   handling, the helper, or calibration.
 
 ## Invariants

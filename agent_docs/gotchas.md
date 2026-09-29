@@ -2,6 +2,7 @@
 
 ## Contents
 - Traps
+- Containers and Hugging Face Spaces
 - Findings
 
 ## Traps
@@ -109,6 +110,55 @@
   The cost: a client still writing a rejected body gets a broken pipe rather than the status. Measured with
   a 9 MiB body against both a local server and one over a network; draining the body first would hand back
   a readable 413 but reintroduce exactly the work the early reject avoids.
+
+## Containers and Hugging Face Spaces
+
+Learned setting up a private Docker Space from the `Dockerfile` at the repository root (September 2026).
+The Space itself is a two-file repo, README front matter plus a Dockerfile that clones llav from GitHub.
+
+- **Never compile llama.cpp on the Space builder.** A CUDA build of llama.cpp took over an hour there and
+  was still not done; the builder has few cores and prints nothing while nvcc runs. Start from
+  `ghcr.io/ggml-org/llama.cpp:server-cuda` instead: CUDA 12.8, Ubuntu 24.04, every GPU architecture, a CPU
+  backend per x86 level, and the whole build is then the model download.
+- **That image finds its libraries only from its own directory.** Its binaries and `.so` files sit together
+  in `/app` and its entrypoint runs from there; started from anywhere else, llama-server fails with
+  `libllama-server-impl.so: cannot open shared object file`. Set `LD_LIBRARY_PATH=/app`, and clear the
+  entrypoint (`ENTRYPOINT []`), which is llama-server itself. Its `LLAMA_ARG_HOST` environment variable
+  only produces a warning, since llav passes `--host` explicitly.
+- **Ubuntu 24.04 images already have uid 1000.** They ship an `ubuntu` user holding the uid Spaces run
+  containers as, so `useradd -u 1000` fails with "UID 1000 is not unique". Remove that user first.
+- **llama-server's output does not reach the container log.** llav sends it to a file in its scratch
+  directory, and a Space has no shell, so a start that never reaches "serving" is undiagnosable. The
+  Dockerfiles tail that file into stdout. llav's own 15-minute health wait does print the log tail on
+  failure, which is the fallback.
+- **The Space's container log page lags or stays empty.** It showed only the startup marker while llav was
+  already serving. Read the log through the API instead:
+  `curl -N -H "Authorization: Bearer $HF_TOKEN" https://huggingface.co/api/spaces/OWNER/NAME/logs/run?tail=200`.
+  `GET /api/spaces/OWNER/NAME/runtime` gives the stage and the current against requested hardware.
+- **The builder caches the clone step by its arguments.** With `LLAV_REF=main` unchanged, a rebuild reused
+  the old checkout and ran a llav without a flag that main already had. Pass a commit hash as the build
+  argument (the Space setup script resolves the branch with `git ls-remote`), or use "Factory rebuild".
+  `git clone --branch` does not take a hash; the Space Dockerfile does `git init`, `fetch --depth 1 REF`,
+  `checkout FETCH_HEAD`, which takes a branch, a tag or a commit.
+- **The web UI refuses to be framed, and the Space page is a frame.** The page's Content-Security-Policy
+  says `frame-ancestors 'none'`, so Firefox shows "can't open this page" inside the Space. Start llav with
+  `--frame-ancestors https://huggingface.co`. Opening the app in its own window is not an alternative on a
+  private Space: its direct `*.hf.space` URL answers 404 in a browser, as the Spaces docs state.
+- **A private Space and `--api-key` cannot coexist.** Hugging Face gates a private Space's URL with
+  `Authorization: Bearer <hf token>`, the header llav reads its own key from. Either the proxy consumes it
+  and llav sees no key, or forwards it and llav sees the wrong one; both are a 401. Leave `LLAV_API_KEY`
+  unset on a private Space and let the Hugging Face token be the access control. Set it only on a public
+  or protected Space.
+- **Hardware is not part of the Space; request it.** A new Space is on CPU basic until the hardware is
+  set in Settings or through `POST /api/spaces/OWNER/NAME/hardware`; the setup script does so only when
+  `HARDWARE` is given. Docker Spaces need a paid plan to create at all. Set a sleep time on paid hardware,
+  or it bills around the clock.
+- **The first prompt on the T4 took 24 s; the next ones milliseconds.** Inferred: the prebuilt image ships
+  the T4's architecture as PTX, which the driver compiles on first use, once per container start. A Space
+  that sleeps pays it again on every wake. Not measured beyond the one log.
+- **The prebuilt image's llama.cpp is newer than the tested build.** Build 11243 warns that `enable_thinking`
+  via `--chat-template-kwargs` is deprecated (see the trap above) and works; pin the image tag through
+  `LLAMA_IMAGE` once a build is known good rather than tracking `server-cuda`.
 
 ## Findings
 
