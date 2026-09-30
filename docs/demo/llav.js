@@ -1,5 +1,6 @@
 // llav in the browser: the same typed questions, prompt and readout as the llav server, on llama.cpp compiled
 // to WebAssembly (wllama). A port of src/llav/prompt.py and src/llav/questions.py; keep the two in step.
+// The server's media fields (images, audio) are not ported: the demo is text only.
 //
 // What differs from the server: every question re-reads the text (no shared state), there is no native
 // helper, and the model is whatever GGUF the page loads. The prompt and the readout are the same: the chat

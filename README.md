@@ -88,6 +88,8 @@ their respective owners. llav reproduces the public request/response shape, not 
    (16.8 GB, as accurate as the default on the labelled set and better calibrated, but needs about 18 GB of
    GPU memory). Pass one as a second argument. Only the default is validated;
    [agent_docs/comparisons.md](agent_docs/comparisons.md) compares them and lists the models that failed.
+   Add `--mmproj` as a third argument to also fetch the model's projector for image and audio requests
+   (`qwen3.5-4b` and `qwen3.5-2b` see, `gemma-4-e4b` sees and hears).
 
 3. Serve from the checkout. Nothing needs installing:
 
@@ -96,7 +98,8 @@ their respective owners. llav reproduces the public request/response shape, not 
    ```
 
    `--web-ui` serves a page at http://localhost:8080/ for trying questions in a browser. It also flags an
-   answer whose options got little of the model's probability (see `X-Llav-Candidate-Mass` below). For a
+   answer whose options got little of the model's probability (see `X-Llav-Candidate-Mass` below), and
+   takes images and audio clips (picked, pasted or dropped) when the server runs with `--mmproj`. For a
    `llav` command on your `PATH`, for example to run it as a service, use `pipx install .`.
 
    <a href="docs/webui.png"><img src="docs/webui-thumb.png" width="480" alt="The llav web UI answering a rating and a choice question about a support ticket"></a>
@@ -149,6 +152,11 @@ base URL. Their model id must be one llav accepts, so serve under it (`--model-i
 
 - **`state`** is the text the questions are about: a nonempty string, or a JSON object or array.
 - **`model`** is the served model id, `llav-latest` or `jev-latest` (`--no-jev-alias` refuses the last).
+- **`images`** and **`audio`** (optional, llav's extensions) are arrays of up to 4 base64 data URLs each
+  (`data:image/png;base64,...`, `data:audio/wav;base64,...`; audio as WAV, MP3 or FLAC) the model reads
+  before the state, images first. They need a server started with `--mmproj` (see [Options](#options))
+  whose projector has that modality: Qwen3.5's sees, Gemma 4's sees and hears. `GET /v1/models` reports
+  `backend.images` and `backend.audio`.
 - **`questions`** maps your keys to questions, each with a `type`, `instructions` (string, object or array)
   and `criteria`. Write the actual question in `instructions` ("Do mitochondria play a role in leaf
   remodelling?"), not a generic one that points into the state ("Is the answer to the research question
@@ -179,8 +187,8 @@ base URL. Their model id must be one llav accepts, so serve under it (`--model-i
   411 or 413 is sent before the body is read and closes the connection, so a client still uploading a large
   body may see a broken pipe instead of the status. Check the size before sending rather than relying on
   reading the 413.
-- Every response carries `X-Llav-Seconds`, `X-Llav-Shared-State-Tokens` and `X-Llav-State-Cache`
-  (`hit`, `miss` or `off`).
+- Every response carries `X-Llav-Seconds`, `X-Llav-Shared-State-Tokens` (media tokens included) and
+  `X-Llav-State-Cache` (`hit`, `miss` or `off`).
 - `X-Llav-Calibration` is `none`, or the id of the temperature file loaded with `--calibration`.
 - `X-Llav-Candidate-Mass` lists, per question in answer order, the probability the model gave the option
   letters over its whole vocabulary, for example `0.9991,0.9874`. Well below 1 means the model wanted to
@@ -202,7 +210,9 @@ log-probabilities of `A`, `B`, … softmaxed over the declared options. Nothing 
 text to parse, no reasoning tokens to wait through, and nothing to retry when a model answers in prose.
 Where a template makes the model write a header before its answer (Muse Glimmer's recipient, gpt-oss's
 Harmony channel), llav adds the header to the prompt, and at startup it checks that an answer letter is
-among the likely next tokens.
+among the likely next tokens. With a projector loaded (`--mmproj`), images and audio clips go into the
+same prompt ahead of the payload, through llama.cpp's multimodal path; the text of the prompt does not
+change.
 
 The next-token distribution llav reads is the same one a model consults at every step of a generation. The
 companion project [llpeek](https://github.com/wistrand/llpeek) ([live site](https://wistrand.github.io/llpeek/))
@@ -302,7 +312,7 @@ estimates for other hardware and what a text-generating baseline would cost are 
 ## Options
 
 ```
-llav --gguf FILE [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
+llav --gguf FILE [--mmproj FILE] [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
      [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
      [--frame-ancestors ORIGIN ...] [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
@@ -314,6 +324,12 @@ The web UI refuses to be shown inside another site's frame; `--frame-ancestors O
 example `--frame-ancestors https://huggingface.co` when llav runs in a Hugging Face Space.
 Pass llama.cpp flags through with `--llama-arg`, for example `--llama-arg=-dev --llama-arg=Vulkan0`. When
 attaching to your own server, start it with `--ctx-checkpoints 0 --slot-save-path DIR --swa-full --jinja`.
+
+`--mmproj FILE` loads the model's multimodal projector, so requests may carry `images` and, with a projector
+that hears, `audio`; `scripts/fetch-model.sh DIR qwen3.5-4b --mmproj` downloads the pinned projector next to
+the model (also for `qwen3.5-2b`, and `gemma-4-e4b`, whose projector takes both). Media tokens count against
+`--ctx`, so raise it for large images, long clips or several of them; a request that does not fit is a 422.
+Media requests go through llama-server even with `--native-readout`, and their accuracy is unmeasured.
 
 llav checks at startup that the model answers with an option letter, and exits with a hint if it does not.
 Some chat templates end before the answer can start: Muse Glimmer's model must first write a recipient

@@ -351,5 +351,6 @@ Q8_0, the file `scripts/fetch-model.sh` pins for `qwen3.5-2b`.
 - Order averaging and the flip warning as llav features (an `--orders` option, an `X-Llav-Order-Stable`
   header): measured in [experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md)
   and costed in [performance.md](performance.md), not built; `scripts/orders-proxy.py` is the research stand-in.
-- A stricter startup probe: Gemma 4 12B passes `_probe_labels` and then puts 2% of its mass on the letters
+- A stricter startup probe: Gemma 4 12B (measured before the BOS fix of 2026-09-30; not rerun) passes
+  `_probe_labels` and then puts 2% of its mass on the letters
   ([gotchas.md](gotchas.md)); a threshold on the labels' share of the mass would catch it, untested.

@@ -2,7 +2,8 @@
 
 `llav-readout` answers every question of one request in a single forward pass. llama-server evaluates each
 question separately and restores the state in between; this helper keeps the state resident and decodes all
-the question suffixes together. llav uses it only when started with `--native-readout`, and falls back to
+the question suffixes together. It links libllama only, so requests with images or audio always go through
+llama-server. llav uses it only when started with `--native-readout`, and falls back to
 llama-server whenever it is absent or fails.
 
 Worth it on a fast GPU, where the per-question fixed costs dominate. A repeat request of 10 questions went

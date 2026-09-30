@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler
+import base64
 import io
 import json
 import math
@@ -21,38 +22,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from llav import calibration  # noqa: E402
 from llav.calibration import Calibration, CalibrationError  # noqa: E402
 from llav.cli import main  # noqa: E402
-from llav.engine import ContextTooLong, Engine, EngineError, LlamaClient  # noqa: E402
+from llav.engine import ContextTooLong, Engine, EngineError, LlamaClient, MediaRequestError  # noqa: E402
 from llav.native import NativeError, NativeReadout  # noqa: E402
 from llav.openapi import document  # noqa: E402
 from llav.prompt import LABELS, SYSTEM, messages  # noqa: E402
-from llav.questions import ValidationError, build_answer, confidence, parse_request  # noqa: E402
+from llav.questions import ValidationError, build_answer, confidence, parse_media, parse_request  # noqa: E402
 from llav.runtime import LlamaProcess  # noqa: E402
 from llav import templates  # noqa: E402
 from llav.server import WEB_UI, App, Handler, Server  # noqa: E402
 
 CONTROL = "<|im_end|>"
 CONTROL_ID = 100_000
+BOS_ID = 100_001
+MARKER = "<__media_test__>"
 
 
 class FakeClient:
     """Character-level tokenizer; label logprobs come from `scores` keyed by letter."""
 
-    def __init__(self, scores=None, trims=False, slot_dir=None):
+    def __init__(self, scores=None, trims=False, slot_dir=None, vision=False, audio=False, bos=False):
         self.scores = scores or {"A": -0.1, "B": -2.5}
+        self.bos = bos  # the vocabulary adds a BOS token when asked, as Gemma's does
         self.trims = trims  # answer the engine's probe as an attention-only backend would
         self.slot_dir = slot_dir  # when set, saves write a file, as llama-server does
+        self.vision = vision  # /props reports a projector that sees, and the run's media marker
+        self.audio = audio  # and one that hears
         self.calls = []
+        self.bodies = []
         self.tokenized = []
+
+    def get(self, path):
+        if path == "/props" and (self.vision or self.audio):
+            return {"media_marker": MARKER, "modalities": {"vision": self.vision, "audio": self.audio}}
+        return {}
 
     def render(self, turns):
         return "<sys>" + turns[0]["content"] + "<user>" + turns[1]["content"] + "<assistant>\n"
 
-    def tokenize(self, text, special=True):
+    def tokenize(self, text, special=True, add_special=False):
         """Characters, except CONTROL becomes one control token when special tokens are parsed."""
         self.tokenized.append((text, special))
         if not special:
             return [ord(char) for char in text]
-        ids = []
+        ids = [BOS_ID] if add_special and self.bos else []
         for index, part in enumerate(text.split(CONTROL)):
             if index:
                 ids.append(CONTROL_ID)
@@ -65,13 +77,19 @@ class FakeClient:
 
     def post(self, path, body):
         self.calls.append(path)
+        self.bodies.append(body)
         if self.slot_dir and path.endswith("action=save"):
             (Path(self.slot_dir) / body["filename"]).write_bytes(b"slot state")
         if path == "/completion":
+            prompt = body["prompt"]
+            if isinstance(prompt, dict):  # a media prompt: the server counts its own tokens
+                if not (self.vision or self.audio):
+                    raise EngineError("llama-server /completion returned 500: model does not support multimodal")
+                prompt = prompt["prompt_string"] + "#" * 64 * len(prompt["multimodal_data"])
             if body["n_predict"] == 0:
-                return {"timings": {"prompt_n": len(body["prompt"])}}
+                return {"timings": {"prompt_n": len(prompt)}}
             if "n_probs" not in body:  # the startup probe: a trimming backend evaluates only the new tokens
-                evaluated = 1 if self.trims else len(body["prompt"])
+                evaluated = 1 if self.trims else len(prompt)
                 return {"timings": {"prompt_n": evaluated}}
             top = [{"id": ord(letter), "logprob": value} for letter, value in self.scores.items()]
             top.append({"id": ord("z"), "logprob": -30.0})
@@ -167,6 +185,36 @@ class QuestionTest(unittest.TestCase):
         with self.assertRaises(ValidationError) as caught:
             parse_request(dict(body, temperature=1.0))
         self.assertEqual(caught.exception.loc, ["body", "temperature"])
+
+    def test_parses_images_and_audio_as_data_urls(self):
+        body = request({"a": {"type": "noul", "instructions": "q"}})
+        self.assertEqual(parse_media(body), [])
+        self.assertEqual(parse_media(dict(body, images=[], audio=[])), [])
+        png = "data:image/png;base64," + base64.b64encode(b"\x89PNG").decode()
+        wav = "data:audio/wav;base64," + base64.b64encode(b"RIFF").decode()
+        self.assertEqual(parse_media(dict(body, images=[png, png])), [("image", b"\x89PNG"), ("image", b"\x89PNG")])
+        # Images come first whatever the key order, since the prompt puts them first.
+        self.assertEqual(parse_media(dict(body, audio=[wav], images=[png])), [("image", b"\x89PNG"), ("audio", b"RIFF")])
+        parse_request(dict(body, images=[png], audio=[wav]))  # the keys are not unknown to the request parser
+        with self.assertRaises(ValidationError) as caught:
+            parse_media(dict(body, audio=[png]))
+        self.assertEqual(caught.exception.loc, ["body", "audio", 0])
+        with self.assertRaises(ValidationError) as caught:
+            parse_media(dict(body, audio=[wav] * 5))
+        self.assertEqual(caught.exception.loc, ["body", "audio"])
+        cases = [
+            ("x", ["body", "images"]),
+            ([png] * 5, ["body", "images"]),
+            ([42], ["body", "images", 0]),
+            (["data:text/plain;base64,aGk="], ["body", "images", 0]),
+            (["data:image/png,aGk="], ["body", "images", 0]),
+            ([png, "data:image/png;base64,***"], ["body", "images", 1]),
+            (["data:image/png;base64,"], ["body", "images", 0]),
+        ]
+        for images, loc in cases:
+            with self.subTest(images=images), self.assertRaises(ValidationError) as caught:
+                parse_media(dict(body, images=images))
+            self.assertEqual(caught.exception.loc, loc)
 
     def test_confidence_bounds(self):
         self.assertAlmostEqual(confidence([1.0, 0.0, 0.0]), 1.0)
@@ -273,6 +321,19 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(encoded[0], ids)
         self.assertEqual(engine.profile, templates.DEFAULT)
 
+    def test_head_gets_the_vocabularys_bos_on_every_path(self):
+        client = FakeClient(bos=True)
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}, "b": {"type": "noul", "instructions": "r"}}))
+        ids = engine.encode("state", questions[0])
+        self.assertEqual(ids[0], BOS_ID)
+        self.assertEqual(ids.count(BOS_ID), 1)
+        prefix, encoded = engine.encode_all("state", questions)
+        self.assertEqual((prefix[0], encoded[0], engine.state_prefix("state")), (BOS_ID, ids, prefix))
+        # A vocabulary without BOS gets none, as before.
+        ids = self.engine(FakeClient()).encode("state", questions[0])
+        self.assertNotIn(BOS_ID, ids)
+
     def test_refuses_to_start_when_no_letter_follows_the_template(self):
         client = FakeClient(scores={"x": -0.05})  # the model wants to write something else
         with self.assertRaisesRegex(EngineError, "--assistant-prefix"):
@@ -286,6 +347,112 @@ class EngineTest(unittest.TestCase):
         self.assertAlmostEqual(results[0][0], expected)
         self.assertNotIn("/slots/0?action=save", client.calls)
         self.assertEqual((usage["output_tokens"], meta["shared_state_tokens"]), (0, 0))
+
+    def test_image_request_sends_prompt_strings_around_the_same_payloads(self):
+        client = FakeClient(vision=True, slot_dir=self.slot_dir.name)
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({
+            "a": {"type": "noul", "instructions": "q1"},
+            "b": {"type": "choice", "instructions": "q2", "criteria": {"x": None, "y": None}},
+        }))
+        results, usage, meta = engine.evaluate("state", questions, [("image", b"png-1"), ("image", b"png-2")])
+        self.assertAlmostEqual(results[0][0], 1 / (1 + math.exp(-2.4)))
+        data = [base64.b64encode(b"png-1").decode(), base64.b64encode(b"png-2").decode()]
+        completions = [body for body in client.bodies if "prompt_string" in (body.get("prompt") or {})]
+        self.assertEqual(len(completions), 3)  # the prefix, then a question each
+        prime, first, second = completions
+        head, payload, tail = engine._split(messages("state", questions[0].instructions, list(questions[0].descriptions)))
+        self.assertEqual(first["prompt"], {"prompt_string": head + MARKER * 2 + payload + tail, "multimodal_data": data})
+        self.assertEqual(prime["prompt"]["multimodal_data"], data)
+        self.assertTrue(first["prompt"]["prompt_string"].startswith(prime["prompt"]["prompt_string"]))
+        self.assertTrue(second["prompt"]["prompt_string"].startswith(prime["prompt"]["prompt_string"]))
+        self.assertEqual((prime["n_predict"], first["n_predict"], first["cache_prompt"]), (0, 1, True))
+        self.assertEqual(client.calls.count("/slots/0?action=save"), 1)
+        self.assertEqual(client.calls.count("/slots/0?action=restore"), 1)
+        # The server counted the prefix, image tokens included; a repeat restores the file.
+        self.assertEqual(meta["shared_state_tokens"], len(prime["prompt"]["prompt_string"]) + 128)
+        self.assertEqual(meta["state_cache"], "miss")
+        self.assertEqual(usage["input_tokens"], meta["shared_state_tokens"] + 14)
+        _, _, meta = engine.evaluate("state", questions, [("image", b"png-1"), ("image", b"png-2")])
+        self.assertEqual(meta["state_cache"], "hit")
+        self.assertEqual(meta["shared_state_tokens"], len(prime["prompt"]["prompt_string"]) + 128)
+        # Different images, same text: another file.
+        _, _, meta = engine.evaluate("state", questions, [("image", b"png-3"), ("image", b"png-2")])
+        self.assertEqual(meta["state_cache"], "miss")
+        self.assertEqual((engine.backend_status()["images"], engine.backend_status()["audio"]), (True, False))
+
+    def test_image_request_refuses_chat_control_text(self):
+        engine = self.engine(FakeClient(vision=True))
+        _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}}))
+        with self.assertRaises(MediaRequestError) as caught:
+            engine.evaluate("state " + CONTROL, questions, [("image", b"png")])
+        self.assertEqual(caught.exception.loc, ["body", "state"])
+        _, _, questions = parse_request(request({"k": {"type": "noul", "instructions": "q " + CONTROL}}))
+        with self.assertRaises(MediaRequestError) as caught:
+            engine.evaluate("state", questions, [("image", b"png")])
+        self.assertEqual(caught.exception.loc, ["body", "questions", "k"])
+
+    def test_media_request_needs_a_projector_with_that_modality(self):
+        client = FakeClient()
+        engine = self.engine(client)
+        self.assertEqual(engine.backend_status()["images"], False)
+        _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}}))
+        startup_calls = len(client.calls)
+        with self.assertRaises(MediaRequestError) as caught:
+            engine.evaluate("state", questions, [("image", b"png")])
+        self.assertEqual(caught.exception.loc, ["body", "images"])
+        self.assertEqual(len(client.calls), startup_calls)  # refused before anything reaches the backend
+        # A projector that sees but does not hear refuses audio, and only audio.
+        engine = self.engine(FakeClient(vision=True))
+        with self.assertRaises(MediaRequestError) as caught:
+            engine.evaluate("state", questions, [("image", b"png"), ("audio", b"RIFF")])
+        self.assertEqual(caught.exception.loc, ["body", "audio"])
+
+    def test_audio_request_sends_the_clips_after_the_images(self):
+        client = FakeClient(vision=True, audio=True)
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}}))
+        results, _, meta = engine.evaluate("state", questions, [("image", b"png"), ("audio", b"RIFF")])
+        self.assertAlmostEqual(results[0][0], 1 / (1 + math.exp(-2.4)))
+        prompt = next(body["prompt"] for body in client.bodies if "prompt_string" in (body.get("prompt") or {}))
+        self.assertEqual(prompt["multimodal_data"], [base64.b64encode(b"png").decode(), base64.b64encode(b"RIFF").decode()])
+        self.assertEqual(prompt["prompt_string"].count(MARKER), 2)
+        self.assertEqual(meta["state_cache"], "miss")
+
+    def test_image_request_maps_the_servers_context_error_to_the_question(self):
+        client = FakeClient(vision=True)
+        engine = self.engine(client, slot_ctx=100_000)
+        _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}}))
+        original = client.post
+
+        def post(path, body):
+            if path == "/completion" and isinstance(body.get("prompt"), dict):
+                raise EngineError("llama-server /completion returned 400: request (9000 tokens) exceeds the "
+                                  "available context size (8192 tokens)")
+            return original(path, body)
+
+        client.post = post
+        with self.assertRaises(ContextTooLong) as caught:
+            engine.evaluate("state", questions, [("image", b"png")])
+        self.assertEqual(caught.exception.key, "a")
+
+    def test_media_request_maps_an_undecodable_file_to_422(self):
+        client = FakeClient(vision=True, audio=True)
+        engine = self.engine(client)
+        _, _, questions = parse_request(request({"a": {"type": "noul", "instructions": "q"}}))
+        original = client.post
+
+        def post(path, body):
+            if path == "/completion" and isinstance(body.get("prompt"), dict):
+                raise EngineError('llama-server /completion returned 400: {"error":{"code":400,"message":'
+                                  '"Failed to load image or audio file","type":"invalid_request_error"}}')
+            return original(path, body)
+
+        client.post = post
+        with self.assertRaises(MediaRequestError) as caught:
+            engine.evaluate("state", questions, [("audio", b"not a wav")])
+        self.assertEqual(caught.exception.loc, ["body", "audio"])  # no images were sent
+        self.assertIn("WAV", caught.exception.message)
 
     def test_candidate_mass_sums_the_declared_labels_over_the_vocabulary(self):
         client = FakeClient(scores={"A": -0.5, "B": -2.5, "C": -3.0})
@@ -514,11 +681,13 @@ class LlamaClientTest(unittest.TestCase):
 class FakeEngine:
     def __init__(self, error=None):
         self.error = error
+        self.media = None  # what the last request carried
 
     def backend_status(self):
-        return {"prefix_reuse": "trim"}
+        return {"prefix_reuse": "trim", "images": False, "audio": False}
 
-    def evaluate(self, state, questions):
+    def evaluate(self, state, questions, media=()):
+        self.media = list(media)
         if self.error:
             raise self.error
         return [[0.75, 0.25] for _ in questions], {"input_tokens": 1, "output_tokens": 0}, {
@@ -622,7 +791,7 @@ class NativeReadoutTest(unittest.TestCase):
             "a": {"type": "noul", "instructions": "q1"},
             "b": {"type": "noul", "instructions": "q2"},
         }))
-        self.assertEqual(engine.backend_status(), {"prefix_reuse": "native"})
+        self.assertEqual(engine.backend_status(), {"prefix_reuse": "native", "images": False, "audio": False})
         with mock.patch("sys.stderr"):
             results, _, _ = engine.evaluate({"ticket": "x"}, questions)
         self.assertEqual(len(results), 2)  # answered by llama-server instead
@@ -786,6 +955,23 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual(status, expected)
                 self.assertTrue(headers["closed"])
 
+    def test_media_reach_the_engine_or_fail_validation(self):
+        engine = FakeEngine()
+        port = self.serve(engine)
+        png = "data:image/png;base64," + base64.b64encode(b"\x89PNG").decode()
+        wav = "data:audio/wav;base64," + base64.b64encode(b"RIFF").decode()
+        body = json.dumps(dict(request({"a": {"type": "noul", "instructions": "q"}}), images=[png], audio=[wav])).encode()
+        status, _, _ = self.exchange(port, self.post_head(str(len(body))), body)
+        self.assertEqual((status, engine.media), (200, [("image", b"\x89PNG"), ("audio", b"RIFF")]))
+        body = json.dumps(dict(request({"a": {"type": "noul", "instructions": "q"}}), images=["nope"])).encode()
+        status, _, data = self.exchange(port, self.post_head(str(len(body))), body)
+        self.assertEqual(status, 422)
+        self.assertEqual(json.loads(data)["detail"][0]["loc"], ["body", "images", 0])
+        port = self.serve(FakeEngine(MediaRequestError(["body", "images"], "no projector")))
+        body = json.dumps(dict(request({"a": {"type": "noul", "instructions": "q"}}), images=[png])).encode()
+        status, _, data = self.exchange(port, self.post_head(str(len(body))), body)
+        self.assertEqual((status, json.loads(data)["detail"][0]["loc"]), (422, ["body", "images"]))
+
     def test_openrouter_decisions_path_is_an_alias(self):
         head = f"POST /api/alpha/decisions HTTP/1.1\nHost: x\nContent-Length: {len(self.BODY)}\n"
         status, _, data = self.exchange(self.serve(), head, self.BODY)
@@ -843,6 +1029,12 @@ class LlamaProcessTest(unittest.TestCase):
             self.assertEqual(command[command.index("--ctx-checkpoints") + 1], "0")
             self.assertIn("--slot-save-path", command)
             self.assertIn("--swa-full", command)
+            self.assertNotIn("--mmproj", command)
+            with mock.patch.object(LlamaProcess, "_wait_ready", interrupted), self.assertRaises(KeyboardInterrupt):
+                LlamaProcess(str(binary), Path("model.gguf"), 1, 1, 8, Path(directory),
+                             Path(directory) / "log", [], mmproj=Path("proj.gguf"))
+            command = commands[1]
+            self.assertEqual(command[command.index("--mmproj") + 1], "proj.gguf")
 
     def test_a_failed_start_quotes_the_log(self):
         # The log is deleted with llav's scratch directory, so the error must carry its end.
@@ -874,6 +1066,10 @@ class CliTest(unittest.TestCase):
                       ["--queue-timeout", "-1"]):
             with self.subTest(flags=flags), mock.patch("sys.stderr"), self.assertRaises(SystemExit):
                 main(["--gguf", "model.gguf", *flags])
+
+    def test_mmproj_needs_a_managed_server(self):
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            main(["--llama-url", "http://127.0.0.1:1", "--slot-dir", "/tmp", "--mmproj", "proj.gguf"])
 
     def test_busy_port_fails_before_the_model_loads(self):
         with socket.socket() as busy, tempfile.NamedTemporaryFile(suffix=".gguf") as model:

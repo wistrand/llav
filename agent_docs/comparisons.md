@@ -20,37 +20,99 @@ with an Intel Arc B390 iGPU, llama.cpp build 10809, Q8_0 GGUFs.
 ## The System One landscape
 
 TypeSafe launched Jev on 2026-09-15 and named the category "System One models": typed `noul`, `choice` and
-`score` answers with probabilities, from one parallel pass instead of generated text. Within ten days
-community lists counted over a hundred related repositories. What follows was read on 2026-09-24 from
-launch material, write-ups and project READMEs; only the rows marked measured were run here.
+`score` answers with probabilities, from one parallel pass instead of generated text. First read on
+2026-09-24, re-surveyed on 2026-09-30 from launch material, docs, preprints, boards and project READMEs;
+only the rows marked measured were run here. Scale: "Jev in the Wild" (arXiv 2609.30216) surveyed 2,170
+public Jev projects as of 09-22; awesome-jev holds 288 entries.
 
-| Approach                                        | Examples                                              | Here                          |
-|-------------------------------------------------|-------------------------------------------------------|-------------------------------|
-| Hosted, trained, undisclosed                    | Jev (TypeSafe)                                        | Jev measured                  |
-| Letter probabilities of an untrained chat model | SemIf, OneForward, AnyJev, poorjev, decidr, **llav**  | llav measured                 |
-| Trained bidirectional encoder                   | Laya, von, openJev Verdict                            | Laya and von measured         |
-| Frozen LLM plus trained head                    | CLM, minojev, kev, JevForge                           | CLM measured                  |
-| Diffusion model                                 | OpenJev (DiffusionGemma)                              | not run                       |
-| Hosted chat model, constrained to given answers | Decisions API (OpenAI, preview)                       | not run, see below            |
+| Approach                                        | Examples                                                        | Here                          |
+|-------------------------------------------------|-----------------------------------------------------------------|-------------------------------|
+| Hosted, trained, undisclosed                    | Jev (TypeSafe), d1 (Liquid AI), Solar Decide (Upstage), Span-01 | Jev measured                  |
+| Hosted chat model, constrained to given answers | Decisions API (OpenAI, preview)                                 | not run, see its section      |
+| Letter probabilities of an untrained chat model | SemIf, OneForward, AnyJev, poorjev, reflex, Ollaya, **llav**    | llav measured                 |
+| Fine-tuned letter-logit LLM                     | decider, Winnow, Plumb, Nev, wald, Tev1 (Together)              | not run                       |
+| Trained bidirectional encoder                   | Laya, von, openJev Verdict                                      | Laya and von measured         |
+| Frozen LLM plus trained head                    | CLM, minojev, Kev, JevForge, jeeves (drafts reasoning first)    | CLM measured                  |
+| Diffusion model                                 | OpenJev (DiffusionGemma), dgemma (Prem, hosted)                 | not run                       |
+| Multimodal readout                              | Imajev, OneJev, openjev-multimodal, PixelJev, Prosodia (audio)  | not run                       |
 
-- **Jev** claims 70 to 500 ms, $0.042 per million input tokens, up to 255 options and calibrated
-  probabilities from a training method it calls RLCD; size, base model and training data are undisclosed.
-  Independent write-ups put it level with mid-price LLMs and 6.5 to 11.5 points behind the frontier, with
-  ECE 0.071 to 0.161, overconfident on multi-class public sets, and fixed largely by one fitted temperature;
-  swapping option names changed 32.5% of its answers in one study. Jevals reports 69.0 on PubMedQA and 67.8
-  on the full 77-intent Banking77. Accuracy, calibration, order and speed were since measured here; see
-  [Jev through OpenRouter](#jev-through-openrouter).
+- **Jev is unchanged since launch**: `jev-1.13.0` is the only model, text only, no fine-tuning, 255 options,
+  64k tokens per request (32k for the state), $0.042 per million input tokens, 70 to 500 ms claimed;
+  the SDKs got point releases. Nothing new is disclosed about size, base model or training data beyond
+  "transformer-based, trained on synthetic data" with RLCD. OpenRouter added `typesafe/jev-router`
+  (09-25), a chat-model router driven by Jev, not a new Jev.
+- **Independent measurement of Jev has moved from blog posts to preprints.** arXiv 2609.37647 (09-29, 37
+  datasets, 346,009 requests for $9.15): choice pooled ECE 0.028 with a per-dataset mean of 0.061, single
+  noul 0.052, multi-label noul 0.168 (over-predicts yes), rotating options left MMLU-calc unchanged at
+  94.3%, 0.36 s per request at 32 concurrent. arXiv 2609.35342 (09-28) argues Jev keeps a hidden "unknown"
+  mass in choice answers. arXiv 2609.30243 (09-24, JevOut) flipped 61.4% of correct decisions with short
+  natural added context. PriorBench (09-20) saw up to 13 points of option-order variation on ambiguous tasks.
+  The earlier write-ups (ECE 0.071 to 0.161, 32.5% of answers changed by renaming options, 6.5 to 11.5
+  points behind frontier LLMs) stand. Measured here: [Jev through OpenRouter](#jev-through-openrouter).
+- **Hosted competitors appeared in the last week, all on TypeSafe's shape.** Liquid AI's d1 (09-29,
+  `/decisions/v1/systemone`, full distribution plus confidence, free tier, claims first on Decision Index
+  0.2.1 at 58.9 against Jev's 57.9); Upstage's Solar Decide (09-28, Solar Mini 4, 35B MoE with 3B active,
+  512k context, $0.05 to 0.10 per million input); Respan's Span-01 (09-26, yes/no behaviour scores over
+  agent traces, $0.02); Together's Tev1 (09-23, a $17 LoRA on Qwen3.5-4B served through chat completions,
+  one letter back, logprobs disclaimed as uncalibrated); Prem's dgemma (09-25, text, image and video
+  state, full distributions). OpenRouter's decisions router lists six models (Jev, Kev-4B, Solar Decide,
+  three Span-01 variants); Vercel AI Gateway, Cloudflare Workers AI and Eden AI resell Jev. Prices
+  converge on $0.042 per million input and free output. Google, Anthropic, Mistral, Cohere, Bedrock and
+  Azure have nothing; OpenAI's Decisions API is the exception, in
+  [its own section](#openais-decisions-api).
+- **Runtimes now serve decision models locally.** Ollama v0.35.0 (09-28) ships a native `/v1/systemone`
+  with Nimble and Tev1 in its library; Ollaya serves fine-tuned models and, since its issue #3 (09-24),
+  any instruct GGUF through a bundled llama-server as an `llm-logits` family, with the note that the logits
+  depend on prefix caching. llamacpp-jev and typed-gguf do the same over an unpatched llama-server. That
+  is llav's construction. What llav still has on its own is the fixed SemIf
+  prompt with measured agreement, the shared-state pass over many questions, the trim probe and the
+  native helper; the "any chat GGUF, no weights" position is no longer unique.
+- **Boards, 2026-09-30.** JevBench's live board is at v1.5.4 (904 open plus 720 sealed decisions, each
+  type scored natively): Cygnet 73.7, Winnow-12B 73.2, Jev 72.1, JevK5 71.9, Plumb-4B 71.6, decider-4b v2
+  71.3, SemIf 68.7 in 12th of 106; 69 of 77 adjacent pairs are statistical ties. Its repo README still
+  shows v1.4.2.2 (Imajev-4B 67.4, Jev 63.3). ImageJevBench v0.1.4 ranks 49 multimodal models. Decision
+  Index 0.2.1 (09-28): Jev 57.9, best open rows 57.4 to 54.7, every open row at 0.76 coverage, so ranks
+  are provisional. The numbers in [the ecosystem section](#the-open-decision-model-ecosystem) are from
+  09-26 and older versions.
+- **Order and calibration studies keep finding the same thing.** rcpeken/jev-calibration (09-25) reads
+  letter logits on Qwen3 0.6B to 4B: cyclic-rotation averaging lifts the 4B from 75.0% to 82.2% on
+  OpenBookQA, temperature scaling halves ECE, reordering changes 8.8 to 91.2% of answers. arXiv 2609.33971
+  (09-27) finds Laya far less order-stable than Jev over 72,000 questions; arXiv 2609.26550 (09-22) flips
+  3.3 to 11.1% of judge verdicts by reversing candidates. llav's own numbers are in
+  [research.md](research.md#labelled-evaluation-calibration-and-option-order) and the averaging result in
+  [experiments/permutation-uncertainty.md](experiments/permutation-uncertainty.md); the rcpeken run is the
+  closest external replication.
 - The same weaknesses showed in llav's own measurements: calibration that depends on the task and yields to
   one temperature per workload ([research.md](research.md#temperature-calibration)), and answers that move
-  with option order and names ([research.md](research.md#labelled-evaluation-calibration-and-option-order)).
+  with option order and names.
 - llav's 26-option limit rules out the full Banking77 that Jev is often measured on; our Banking77 rows use
   its 13 card intents.
-- Sources: [TypeSafe launch post](https://typesafe.ai/blog/introducing-system-one-models-and-jev),
+- llav is not on any of the twelve community lists checked, nor on JevBench's roster or the Decision
+  Index; no external project cites it (searched 09-30).
+- Sources: [TypeSafe docs](https://docs.typesafe.ai/models),
+  [TypeSafe launch post](https://typesafe.ai/blog/introducing-system-one-models-and-jev),
+  [arXiv 2609.37647](https://arxiv.org/abs/2609.37647), [arXiv 2609.35342](https://arxiv.org/abs/2609.35342),
+  [arXiv 2609.30243](https://arxiv.org/abs/2609.30243), [arXiv 2609.30216](https://arxiv.org/abs/2609.30216),
+  [arXiv 2609.33971](https://arxiv.org/abs/2609.33971), [arXiv 2609.26550](https://arxiv.org/abs/2609.26550),
+  [PriorBench](https://github.com/priorbench/jev),
   [eight days of independent tests](https://dev.to/gde/jev-after-eight-days-of-independent-tests-level-with-mid-price-llms-behind-the-frontier-1kln),
-  [Jevals](https://jevals.com/), [awesome-jev](https://github.com/cobanov/awesome-jev),
-  [awesome-open-system-one](https://github.com/MorrisZJ/awesome-open-system-one).
+  [Liquid AI decision models](https://docs.liquid.ai/lfm/models/decision-models),
+  [Solar Decide](https://console.upstage.ai/docs/models/solar-decide),
+  [Together, "How to train your own Jev"](https://together.ai/blog/how-to-train-your-own-jev),
+  [Prem dgemma](https://premai.io/blog/a-jev-compatible-api-for-text-images-and-video/),
+  [OpenRouter decisions models](https://openrouter.ai/models?output_modalities=decisions),
+  [Ollama v0.35.0](https://github.com/ollama/ollama/releases/tag/v0.35.0),
+  [Ollaya issue #3](https://github.com/ollaya-dev/ollaya/issues/3),
+  [JevBench](https://github.com/fstandhartinger/jevbench), [Benchmark Heaven board](https://benchmarkheaven.com/jev-models),
+  [Decision Index](https://huggingface.co/spaces/multimodalart/jev-decision-index),
+  [rcpeken/jev-calibration](https://github.com/rcpeken/jev-calibration),
+  [awesome-jev](https://github.com/cobanov/awesome-jev), [Jevals](https://jevals.com/).
 
 ## Other models
+
+Rows measured before 2026-09-30 sent prompts without a BOS token to models whose vocabulary adds one
+(Gemma 4; Qwen does not, so its rows are unaffected); see [gotchas.md](gotchas.md). Gemma's numbers here
+are from that prompt and have not been rerun.
 
 IBM Granite 4.0 Micro and SmolLM3-3B (Q8_0) were the first alternatives tried. Checked on 2026-09-22 with
 the four-question support-ticket request from the README plus one yes/no question ("Is the customer
@@ -628,7 +690,8 @@ constrained decision making powered by Luna", about 150 ms against 1.6 s for a r
 
 ## The open decision-model ecosystem
 
-Surveyed 2026-09-26 from the web; check before citing. Jev's launch on 2026-09-15 produced, within eleven
+Surveyed 2026-09-26 from the web; check before citing, and see
+[The System One landscape](#the-system-one-landscape) for the 2026-09-30 board versions and newer projects. Jev's launch on 2026-09-15 produced, within eleven
 days, more than thirty open reproductions, two independent benchmarks and a local runtime. Where llav
 stands in it:
 

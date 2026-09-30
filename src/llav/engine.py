@@ -9,10 +9,16 @@ the recurrent state off the GPU on every request. So the state prefix is evaluat
 slot file, and restored before each question; every question then extends the cached tokens exactly.
 llama-server must run with --ctx-checkpoints 0 and --slot-save-path, and with --swa-full, without which a
 sliding-window model cannot extend a cached state.
+
+Images and audio (with --mmproj) take a second path: llama-server accepts media only as a prompt string
+plus `multimodal_data`, never as token ids, so `encode_media` builds strings around the same template head,
+payload and tail, and the server tokenizes them. The readout, the slot files and the shared-state flow are
+the same; the native helper is not used.
 """
 
 from __future__ import annotations
 
+import base64
 from collections import OrderedDict
 import hashlib
 import http.client
@@ -21,6 +27,7 @@ import math
 import os
 from pathlib import Path
 import queue
+import re
 import sys
 import threading
 import time
@@ -54,6 +61,21 @@ class ContextTooLong(Exception):
     def __init__(self, key: str, tokens: int, limit: int):
         super().__init__(f"prompt for question {key!r} has {tokens} tokens; the slot limit is {limit}")
         self.key = key
+
+
+class MediaRequestError(Exception):
+    """A media request this server or this text cannot take; reported as HTTP 422 at `loc`."""
+
+    def __init__(self, loc: list, message: str):
+        super().__init__(message)
+        self.loc = loc
+        self.message = message
+
+
+# llama-server's wording when a prompt, media tokens included, does not fit the slot, and when a media file
+# is not one its decoders read (an image stb_image knows, or WAV, MP3 or FLAC).
+_CONTEXT_EXCEEDED = re.compile(r"request \((\d+) tokens\) exceeds the available context size \((\d+)")
+_MEDIA_UNREADABLE = "Failed to load image or audio file"
 
 
 class LlamaClient:
@@ -95,9 +117,10 @@ class LlamaClient:
         body = {"messages": turns, "chat_template_kwargs": TEMPLATE_KWARGS}
         return self._field("/apply-template", self.post("/apply-template", body), "prompt")
 
-    def tokenize(self, text: str, special: bool = True) -> list[int]:
-        """`special=False` keeps control-token text such as <|im_end|> as plain text."""
-        body = {"content": text, "add_special": False, "parse_special": special}
+    def tokenize(self, text: str, special: bool = True, add_special: bool = False) -> list[int]:
+        """`special=False` keeps control-token text such as <|im_end|> as plain text. `add_special` adds
+        the vocabulary's BOS (and EOS) if it has one, as llama-server's own chat path does."""
+        body = {"content": text, "add_special": add_special, "parse_special": special}
         return self._field("/tokenize", self.post("/tokenize", body), "tokens")
 
     def detokenize(self, tokens: list[int]) -> str:
@@ -137,7 +160,7 @@ class Engine:
         self._template_parts = None
         self._template_lock = threading.Lock()
         self._run = uuid.uuid4().hex[:8]  # so stale files from an earlier run are never restored
-        self._cached = OrderedDict()  # cache filename -> None, least recently used first
+        self._cached = OrderedDict()  # cache filename -> tokens in the file, least recently used first
         self._cache_lock = threading.Lock()
         # The template decides what, if anything, goes between its generation prompt and the answer letter.
         self.profile: Profile = detect(client.render(messages("a", "b", ["Yes", "No"])))
@@ -146,10 +169,19 @@ class Engine:
         self._probe_labels()
         self.native = native  # opt-in fast path; a failure here falls back to llama-server for good
         self.native_error: str | None = None
+        # The media marker is random per llama-server run, so it is read, never hardcoded, and a caller
+        # cannot know it. The modalities are what the loaded projector supports, not what the model name
+        # suggests: Qwen3.5's projector sees, Gemma 4's sees and hears.
+        props = client.get("/props")
+        self.media_marker = str(props.get("media_marker") or "")
+        modalities = props.get("modalities") or {}
+        self.modalities = {kind: bool(modalities.get(reported)) and bool(self.media_marker)
+                           for kind, reported in (("image", "vision"), ("audio", "audio"))}
 
     def backend_status(self) -> dict:
         """What `/v1/models` reports about state reuse now, not at startup: the helper can be dropped later."""
-        status = {"prefix_reuse": "native" if self.native else ("trim" if self.trims else "slot-file")}
+        status = {"prefix_reuse": "native" if self.native else ("trim" if self.trims else "slot-file"),
+                  "images": self.modalities["image"], "audio": self.modalities["audio"]}
         if self.native_error:
             status["native_error"] = self.native_error
         return status
@@ -225,6 +257,10 @@ class Engine:
     def _template(self) -> tuple[str, str, list[int], list[int]]:
         """The template text around the payload, with its tokens. Rendered once, not once per question.
 
+        The head is tokenized with `add_special`, which prepends BOS for a vocabulary that has one. The
+        rendered template does not carry it as text (llama.cpp strips a leading BOS from the rendering so
+        that tokenization adds exactly one), so without this Gemma read its prompts without BOS.
+
         Two probes with different payloads must give the same head and tail; a template that folds the
         payload into either one is refused here rather than producing wrong prompts.
         """
@@ -234,7 +270,8 @@ class Engine:
                 other = self._split(messages({"x": ["y"]}, "c" * 40, ["Yes", "No", "Maybe"]))
                 if (head, tail) != (other[0], other[2]):
                     raise EngineError("The chat template depends on the payload; llav cannot split it")
-                self._template_parts = (head, tail, self.client.tokenize(head), self.client.tokenize(tail))
+                self._template_parts = (head, tail, self.client.tokenize(head, add_special=True),
+                                        self.client.tokenize(tail))
             return self._template_parts
 
     def encode_all(self, state, questions: list[Question]) -> tuple[list[int], list[list[int]]]:
@@ -271,7 +308,8 @@ class Engine:
         # payload sits between a newline and a control token, both token boundaries, so the split
         # matches whole-prompt tokenization whenever the text has no control tokens.
         head, payload, tail = self._split(messages(state, question.instructions, list(question.descriptions)))
-        ids = self.client.tokenize(head) + self.client.tokenize(payload, special=False) + self.client.tokenize(tail)
+        ids = (self.client.tokenize(head, add_special=True) + self.client.tokenize(payload, special=False)
+               + self.client.tokenize(tail))
         if len(ids) >= self.slot_ctx:
             raise ContextTooLong(question.key, len(ids), self.slot_ctx - 1)
         if not self._boundary_ok(tail, len(question.descriptions)):
@@ -281,12 +319,64 @@ class Engine:
     def state_prefix(self, state) -> list[int]:
         """Tokens up to the evidence value, minus the last token (it can merge with what follows)."""
         head, _, _ = self._split(messages(state, "prefix boundary placeholder", ["Yes", "No"]))
-        return self.client.tokenize(head) + self.client.tokenize(evidence_opening(state), special=False)[:-1]
+        return (self.client.tokenize(head, add_special=True)
+                + self.client.tokenize(evidence_opening(state), special=False)[:-1])
 
-    def _readout(self, ids: list[int], count: int, slot: int, cache: bool) -> tuple[list[float], float, int]:
-        """Option probabilities, their candidate mass, and the tokens evaluated."""
+    def encode_media(self, state, questions: list[Question], media: list[tuple[str, bytes]]) -> tuple[dict | None, list[dict]]:
+        """Prompt objects for a media request: the shareable state prefix (None when it is not) and one
+        prompt per question, each `{"prompt_string", "multimodal_data"}` with the media, in order, before
+        the payload. `media` pairs a kind, "image" or "audio", with the file bytes; the server tells them
+        apart itself, the kind only decides which projector modality the request needs.
+
+        The server tokenizes the strings itself, with special-token parsing on and BOS added as `encode`
+        adds it, and splits them at the media marker. The pieces are the template head, then the payload
+        and tail as one piece, so the token ids are those of `encode` with the media chunks in between;
+        what `encode` guarantees by
+        tokenizing caller text without special parsing is guaranteed here by refusing caller text that
+        special parsing would change. The prefix ends where `state_prefix` ends, and is used only when
+        re-tokenizing it gives the same ids, or the server could not extend it exactly.
+        """
+        for kind, field in (("image", "images"), ("audio", "audio")):
+            if any(item == kind for item, _ in media) and not self.modalities[kind]:
+                if not any(self.modalities.values()):
+                    raise MediaRequestError(["body", field], "this server has no projector; start llav with --mmproj")
+                raise MediaRequestError(["body", field], f"this server's projector does not take {kind} input; "
+                                        "start llav with an --mmproj that does")
+        head, tail, head_ids, tail_ids = self._template()
+        marker = self.media_marker
+        markers = marker * len(media)
+        data = [base64.b64encode(item).decode() for _, item in media]
+        opening = evidence_opening(state)
+        opening_ids = self.client.tokenize(opening, special=False)
+        if marker in opening or self.client.tokenize(opening) != opening_ids:
+            raise MediaRequestError(["body", "state"], "state contains chat control text; a media request cannot carry it")
+        shared_text = self.client.detokenize(opening_ids[:-1])
+        shared = opening.startswith(shared_text) and self.client.tokenize(shared_text, special=False) == opening_ids[:-1]
+        prompts = []
+        for index, question in enumerate(questions):
+            payload = messages(state, question.instructions, list(question.descriptions))[-1]["content"]
+            rest = payload[len(shared_text):] if shared else payload
+            rest_ids = self.client.tokenize(rest, special=False)
+            if marker in rest or self.client.tokenize(rest) != rest_ids:
+                raise MediaRequestError(["body", "questions", question.key],
+                                        "question contains chat control text; a media request cannot carry it")
+            if shared and index == 0 and opening_ids[:-1] + rest_ids != self.client.tokenize(payload, special=False):
+                shared = False
+                rest_ids = self.client.tokenize(payload, special=False)
+            text_tokens = len(head_ids) + (len(opening_ids) - 1 if shared else 0) + len(rest_ids) + len(tail_ids)
+            if text_tokens >= self.slot_ctx:
+                raise ContextTooLong(question.key, text_tokens, self.slot_ctx - 1)
+            if not self._boundary_ok(tail, len(question.descriptions)):
+                raise EngineError("Answer boundary changes tokenization for this chat template")
+            prompts.append({"prompt_string": head + markers + payload + tail, "multimodal_data": data})
+        prefix = {"prompt_string": head + markers + shared_text, "multimodal_data": data} if shared else None
+        return prefix, prompts
+
+    def _readout(self, prompt, count: int, slot: int, cache: bool) -> tuple[list[float], float, int]:
+        """Option probabilities, their candidate mass, and the tokens evaluated; `prompt` is token ids or
+        a media prompt object."""
         response = self.client.post("/completion", {
-            "prompt": ids, "n_predict": 1, "temperature": -1, "n_probs": self.n_probs,
+            "prompt": prompt, "n_predict": 1, "temperature": -1, "n_probs": self.n_probs,
             "cache_prompt": cache, "id_slot": slot,
         })
         # With temperature < 0, n_probs are a plain softmax over the raw logits, unaffected by samplers.
@@ -304,9 +394,15 @@ class Engine:
         mass = min(1.0, sum(math.exp(value) for value in logprobs))
         return softmax(logprobs), mass, int((response.get("timings") or {}).get("prompt_n") or 0)
 
-    def _cache_name(self, prefix: list[int]) -> str:
-        digest = hashlib.sha256(b"".join(token.to_bytes(4, "big") for token in prefix)).hexdigest()[:32]
-        return f"llav-{self._run}-{digest}.bin"
+    def _cache_name(self, prefix) -> str:
+        """The slot file for a state prefix: token ids, or a media prompt object keyed by its text and
+        the media bytes."""
+        if isinstance(prefix, dict):
+            material = b"media:" + prefix["prompt_string"].encode() + b"".join(
+                hashlib.sha256(base64.b64decode(item)).digest() for item in prefix["multimodal_data"])
+        else:
+            material = b"tokens:" + b"".join(token.to_bytes(4, "big") for token in prefix)
+        return f"llav-{self._run}-{hashlib.sha256(material).hexdigest()[:32]}.bin"
 
     def _drop(self, name: str) -> None:
         self._cached.pop(name, None)
@@ -315,8 +411,9 @@ class Engine:
         except OSError:
             pass
 
-    def _load_prefix(self, slot: int, prefix: list[int]) -> tuple[str, int]:
-        """Leave `slot` holding exactly `prefix`; returns the slot file (or "") and the tokens evaluated.
+    def _load_prefix(self, slot: int, prefix) -> tuple[str, int, int]:
+        """Leave `slot` holding exactly `prefix`; returns the slot file (or ""), the tokens evaluated, and
+        the tokens the prefix holds (media tokens included, which only the server can count).
 
         A cached state is restored in about 20 ms, against seconds to evaluate it again. The file is kept
         only when a later question or request can use it: a trimming backend serving one question needs
@@ -324,13 +421,13 @@ class Engine:
         """
         name = self._cache_name(prefix)
         with self._cache_lock:
-            hit = name in self._cached
-            if hit:
+            held = self._cached.get(name)
+            if held is not None:
                 self._cached.move_to_end(name)
-        if hit:
+        if held is not None:
             try:
                 self.client.post(f"/slots/{slot}?action=restore", {"filename": name})
-                return name, 0
+                return name, 0, held
             except EngineError:
                 with self._cache_lock:  # the file went missing; fall through and evaluate the state again
                     self._drop(name)
@@ -338,18 +435,18 @@ class Engine:
         primed = self.client.post("/completion", {
             "prompt": prefix, "n_predict": 0, "cache_prompt": True, "id_slot": slot,
         })
-        evaluated = int((primed.get("timings") or {}).get("prompt_n") or len(prefix))
+        evaluated = int((primed.get("timings") or {}).get("prompt_n") or (0 if isinstance(prefix, dict) else len(prefix)))
         if not self.state_cache and self.trims:
-            return "", evaluated  # nothing will restore it: no file
+            return "", evaluated, evaluated  # nothing will restore it: no file
         self.client.post(f"/slots/{slot}?action=save", {"filename": name})
         if not self.state_cache:
-            return name, evaluated  # this request's questions restore it; the caller deletes it
+            return name, evaluated, evaluated  # this request's questions restore it; the caller deletes it
         with self._cache_lock:
-            self._cached[name] = None
+            self._cached[name] = evaluated
             self._cached.move_to_end(name)
             while len(self._cached) > self.state_cache:
                 self._drop(next(iter(self._cached)))
-        return name, evaluated
+        return name, evaluated, evaluated
 
     def clear_cache(self) -> None:
         """Remove every slot file this engine wrote. Called on shutdown; the files are useless after it."""
@@ -375,14 +472,33 @@ class Engine:
                   for values, norm, count in zip(logits, normalizers, counts)]
         return results, masses, evaluated
 
-    def evaluate(self, state, questions: list[Question]) -> tuple[list[list[float]], dict, dict]:
+    def evaluate(self, state, questions: list[Question], media: list[tuple[str, bytes]] = ()) -> tuple[list[list[float]], dict, dict]:
         """Score every question against `state`; returns per-question probabilities, usage, and meta.
 
         `meta["candidate_mass"]` is, per question, the vocabulary probability on its declared labels: near 1
         when the model answered with an option letter, low when it wanted another token and the softmax over
-        the options is noise.
+        the options is noise. With `media` (see `encode_media`), the model reads it before the state.
         """
         counts = [len(question.descriptions) for question in questions]
+        if media:
+            prefix, prompts = self.encode_media(state, questions, list(media))
+            # Encoding the media dominates, so one question shares its prefix whenever it can be cached.
+            if len(prompts) == 1 and not self.state_cache:
+                prefix = None
+            try:
+                slot = self.free.get(timeout=self.queue_timeout)
+            except queue.Empty:
+                raise Overloaded("All llama-server slots are busy") from None
+            try:
+                return self._evaluate_prompts(slot, prefix, prompts, counts, [q.key for q in questions],
+                                              time.perf_counter())
+            except MediaRequestError as error:
+                # The server does not say which file it could not decode; point at a field that has one.
+                if error.loc == ["body", "images"] and not any(kind == "image" for kind, _ in media):
+                    error.loc = ["body", "audio"]
+                raise
+            finally:
+                self.free.put(slot)
         prefix, encoded = self.encode_all(state, questions)
         # One question is worth a shared prefix only when the state can be cached for a later request:
         # priming it costs an extra pass, and pays for itself the next time the same state arrives.
@@ -401,11 +517,7 @@ class Engine:
 
     def _evaluate_on(self, slot: int, prefix: list[int], encoded: list[list[int]], counts: list[int]):
         started = time.perf_counter()
-        computed = 0
-        results = []
-        masses = []
         shared = bool(prefix) and all(ids[: len(prefix)] == prefix and len(ids) > len(prefix) for ids in encoded)
-        cached = False
         native = self._evaluate_native(prefix, encoded, counts) if shared else None
         if native is not None:
             results, masses, computed = native
@@ -415,22 +527,39 @@ class Engine:
             meta = {"shared_state_tokens": len(prefix), "seconds": time.perf_counter() - started,
                     "state_cache": "hit" if cached else "miss", "candidate_mass": masses}
             return results, usage, meta
-        if not shared:
-            for ids, count in zip(encoded, counts):
-                probabilities, mass, n = self._readout(ids, count, slot, cache=False)
+        return self._evaluate_prompts(slot, prefix if shared else None, encoded, counts, None, started)
+
+    def _evaluate_prompts(self, slot: int, prefix, prompts: list, counts: list[int], keys: list[str] | None,
+                          started: float):
+        """Read every prompt out on `slot`, through the shared prefix when there is one.
+
+        `prompts` are token lists or media prompt objects. `keys` names the questions when the server, not
+        llav, counts the prompt (media tokens), so that its context error becomes a 422 for that question.
+        """
+        computed = 0
+        results = []
+        masses = []
+        cached = False
+        held = 0
+        if prefix is None:
+            for index, (prompt, count) in enumerate(zip(prompts, counts)):
+                probabilities, mass, n = self._call_readout(prompt, count, slot, False, keys, index)
                 results.append(probabilities)
                 masses.append(mass)
                 computed += n
         else:
-            name, evaluated = self._load_prefix(slot, prefix)
+            try:
+                name, evaluated, held = self._load_prefix(slot, prefix)
+            except EngineError as error:
+                raise self._caller_error(error, keys, 0) from error
             cached = evaluated == 0
             computed += evaluated
             try:
-                for index, (ids, count) in enumerate(zip(encoded, counts)):
+                for index, (prompt, count) in enumerate(zip(prompts, counts)):
                     # A trimming backend rolls back to the prefix by itself; the rest need the slot file.
                     if index and not self.trims:
                         self.client.post(f"/slots/{slot}?action=restore", {"filename": name})
-                    probabilities, mass, n = self._readout(ids, count, slot, cache=True)
+                    probabilities, mass, n = self._call_readout(prompt, count, slot, True, keys, index)
                     results.append(probabilities)
                     masses.append(mass)
                     computed += n
@@ -438,7 +567,30 @@ class Engine:
                 if name and not self.state_cache:
                     self._drop(name)
         usage = {"input_tokens": computed, "output_tokens": 0}
-        meta = {"shared_state_tokens": len(prefix) if shared else 0, "seconds": time.perf_counter() - started,
-                "state_cache": ("hit" if cached else "miss") if shared and self.state_cache else "off",
+        # Token prefixes are counted by llav; a media prefix only by the server, media tokens included.
+        meta = {"shared_state_tokens": len(prefix) if isinstance(prefix, list) else held,
+                "seconds": time.perf_counter() - started,
+                "state_cache": ("hit" if cached else "miss") if prefix is not None and self.state_cache else "off",
                 "candidate_mass": masses}
         return results, usage, meta
+
+    def _call_readout(self, prompt, count: int, slot: int, cache: bool, keys: list[str] | None, index: int):
+        try:
+            return self._readout(prompt, count, slot, cache)
+        except EngineError as error:
+            raise self._caller_error(error, keys, index) from error
+
+    @staticmethod
+    def _caller_error(error: EngineError, keys: list[str] | None, index: int) -> Exception:
+        """A server error that a media request's caller caused, as its 422: the context error as
+        `ContextTooLong` for the question it hit, an undecodable file as `MediaRequestError`. Any other
+        error as is. `keys` is None on the token path, where llav checked the prompt itself."""
+        if keys is None:
+            return error
+        match = _CONTEXT_EXCEEDED.search(str(error))
+        if match is not None:
+            return ContextTooLong(keys[index], int(match.group(1)), int(match.group(2)))
+        if _MEDIA_UNREADABLE in str(error):
+            return MediaRequestError(["body", "images"], "a file could not be decoded: images must be PNG, JPEG "
+                                     "or another format stb_image reads, audio must be WAV, MP3 or FLAC")
+        return error

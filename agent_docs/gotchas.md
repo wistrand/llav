@@ -17,6 +17,37 @@
   cache match recomputes the whole prompt (13.38 s against 1.08 s for five questions) and returns
   probabilities that differ by up to 0.06, because the recurrent state never rolled back. The startup probe
   decides; a wrong answer there is slow and quietly wrong, not an error.
+- **The media marker is random per llama-server run.** `/props` reports it (`media_marker`); an image
+  prompt with any other marker text is plain text and the server rejects the request for having fewer
+  markers than images. Read it at startup, never hardcode `<__media__>`.
+- **Media prompts are tokenized by the server with special-token parsing on.** llama-server's multimodal
+  prompt form takes a string, so the text path's `parse_special: false` guard does not apply. `encode_media`
+  refuses caller text whose tokenization differs with parsing on; do not relax that check to make a
+  request pass.
+- **The rendered template carries no BOS; tokenization must add it.** llama.cpp strips a leading BOS from
+  a rendered chat template so that tokenizing with `add_special` adds exactly one, and its own chat path
+  tokenizes that way. llav tokenized the head with `add_special: false`, so every model whose vocabulary
+  adds BOS (Gemma 4; not Qwen) read its prompts without one, until 2026-09-30, when the media path, which
+  llama-server tokenizes with `add_special`, showed the difference. `Engine._template`, `encode` and
+  `state_prefix` now tokenize the head with `add_special`; Qwen's token ids are unchanged. Gemma's
+  screening numbers in [comparisons.md](comparisons.md) predate the fix.
+- **Image tokens count against the slot context and llav cannot count them.** On Qwen3.5-4B a 512 px
+  image took about 254 tokens and a 1024 px image about 1,022 (measured 2026-09-30); with the default
+  `--ctx 8192` several large images plus a long state overflow.
+  The server's error is mapped to a 422 for the question; `--image-max-tokens` through `--llama-arg`
+  caps the cost per image.
+- **A slot file that holds media chunks restores only with the projector loaded.** Restoring it on a server
+  without `--mmproj` is an error, and `Engine` then evaluates the state again; file names hash the media
+  bytes, so text-only and media states never collide.
+- **Audio needs a projector with an audio encoder, and llama.cpp decodes only WAV, MP3 and FLAC.** Qwen3.5's
+  projector has none (`/props` reports `audio: false`, and llav answers a 422 naming the field); Gemma 4
+  E4B's pinned projector has both encoders (checked in its GGUF header, `clip.has_audio_encoder`).
+  Browser recordings are WebM or Opus, which the server cannot decode, so the web UI takes files only. A
+  file none of the decoders read comes back from llama-server as a 400 "Failed to load image or audio
+  file", after an "ffprobe failed" line in its log (it tries video last; harmless); `Engine._caller_error`
+  turns it into a 422. llama.cpp warns at load that audio input "is in experimental stage and may have
+  reduced quality"; the smoke test in [design.md](design.md#images-and-audio) shows what that meant on
+  Gemma 4 E4B.
 - **A cached slot file is only valid for the run that wrote it.** Filenames carry a per-run id, so a file
   left in a `--slot-dir` by an earlier llav is never restored. Restoring a file from another model or
   context size would be silently wrong.
@@ -176,6 +207,19 @@ The Space itself is a two-file repo, README front matter plus a Dockerfile that 
   170 ms).
 - **Fix:** `--ctx-checkpoints 0`, with the prefix saved once to a slot file and restored before each question.
 - **Takeaway:** now a global invariant in [CLAUDE.md](../CLAUDE.md#invariants).
+
+### A double Ctrl-C orphaned llama-server and leaked the scratch directory
+
+- **Symptom (2026-09-30):** two Ctrl-Cs in a row left `/tmp/llav-*` behind with its log ending in
+  llama-server's "Received second interrupt, terminating immediately", and that llama-server still alive
+  hours later, holding the model.
+- **Cause:** the terminal delivers SIGINT to the whole foreground group. The first one started llav's
+  cleanup; the second raised `KeyboardInterrupt` inside the `finally` block in `cli.main`, before
+  `process.stop` finished and before the directory was removed, and llama-server's own second-interrupt
+  path hung.
+- **Fix:** `cli.main` ignores SIGINT and SIGTERM once cleanup starts, and `LlamaProcess` starts
+  llama-server in its own session (`start_new_session`), so it only ever receives llav's one SIGTERM.
+  The watchdog (`_WATCHDOG` in `runtime.py`) already ignored SIGINT.
 
 ### Caller text could forge chat turns
 

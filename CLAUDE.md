@@ -24,9 +24,9 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 |----------------------------|------------------------------------------------------------------------|
 | `src/llav/cli.py`          | Entry point `main()`: flags, managed vs external llama-server, cleanup |
 | `src/llav/server.py`       | `Handler`: routes, auth, body limits, error-to-status mapping          |
-| `src/llav/questions.py`    | `parse_request()`, `Question`, `build_answer()`, `confidence()`        |
+| `src/llav/questions.py`    | `parse_request()`, `parse_media()`, `Question`, `build_answer()`       |
 | `src/llav/prompt.py`       | `messages()`: SemIf `direct-options-v1` prompt; `LABELS`               |
-| `src/llav/engine.py`       | `LlamaClient`, `Engine.evaluate()`: tokenization, slots, readout       |
+| `src/llav/engine.py`       | `LlamaClient`, `Engine.evaluate()`: tokenization, slots, readout, media |
 | `src/llav/runtime.py`      | `LlamaProcess`: start, health-wait, stop llama-server                  |
 | `src/llav/webui.html`      | Optional browser UI (`--web-ui`); self-contained, no external requests |
 | `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
@@ -56,7 +56,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 PYTHONPATH=src python3 -m llav --gguf PATH.gguf          # serve (starts llama-server)
 PYTHONPATH=src python3 -m llav --help                    # flags; the source of truth for options
 python3 -m unittest discover -s tests                    # unit tests
-scripts/fetch-model.sh DIR [MODEL]                       # get a pinned model (default qwen3.5-4b)
+scripts/fetch-model.sh DIR [MODEL] [--mmproj]            # get a pinned model (default qwen3.5-4b), and its projector
 scripts/benchmark.py timing http://127.0.0.1:8080        # also accuracy, articles, phases
 scripts/evaluate.py score http://127.0.0.1:8080 DIR      # after `evaluate.py fetch DIR`; also shifts, fit
 scripts/perturb.py run http://127.0.0.1:8080 DIR --out R.jsonl   # order-permutation experiment; then analyze, h2 (--budget fixed for the paper)
@@ -67,7 +67,7 @@ Quick start lists install options per platform; `native/README.md` covers the op
 
 ## Docs
 
-- [agent_docs/architecture.md](agent_docs/architecture.md): modules, request flow, shared-state flow,
+- [agent_docs/architecture.md](agent_docs/architecture.md): modules, request flow, shared-state flow, media requests,
   tokenization split, slot pool, process lifecycle. Read before changing `engine.py` or `server.py`.
 - [agent_docs/design.md](agent_docs/design.md): API compatibility decisions: how each question type maps to
   options, confidence and score formulas, aliases, usage semantics, error format, deliberate differences
@@ -89,9 +89,9 @@ Quick start lists install options per platform; `native/README.md` covers the op
 - [agent_docs/experiments/noul-framing.md](agent_docs/experiments/noul-framing.md): plan to measure how a
   noul should be framed (the criteria fold against a yes/no choice), triggered by JevBench's public nouls.
 - [agent_docs/gotchas.md](agent_docs/gotchas.md): llama.cpp and hybrid-model traps, plus the readout,
-  native-helper, calibration and container traps (Hugging Face Spaces, the prebuilt llama.cpp image).
-  Skim before touching llama-server flags, the readout, option
-  handling, the helper, or calibration.
+  native-helper, calibration, media (marker, BOS, audio formats) and container traps (Hugging Face Spaces,
+  the prebuilt llama.cpp image). Skim before touching llama-server flags, the readout, option handling,
+  the helper, media, or calibration.
 
 ## Invariants
 
@@ -110,7 +110,13 @@ Quick start lists install options per platform; `native/README.md` covers the op
   `n_probs`, which returns a plain softmax over the raw logits. Do not use `post_sampling_probs`, grammars or
   `logit_bias`.
 - Always tokenize caller text (state, instructions, criteria) with `parse_special: false`, so it cannot
-  forge chat-template control tokens. Only template text is tokenized with special-token parsing.
+  forge chat-template control tokens. Only template text is tokenized with special-token parsing. Media
+  requests (images, audio), which llama-server tokenizes itself, must instead refuse caller text that
+  special-token parsing would change (`Engine.encode_media`); never send caller text as a string without
+  that check.
+- Always read llama-server's media marker and modalities from `/props`; the marker is random per run and
+  the modalities are the projector's, never the model name's. Media requests take the HTTP path only, and
+  the text prompt stays byte-identical whether or not media is attached.
 - Always run llama-server with `--ctx-checkpoints 0`, `--slot-save-path` and `--swa-full`. Whether a slot's cache may be
   reused between questions is decided by `Engine`'s startup probe (`trims`), never by a model name; a
   backend that fails the probe restores the saved prefix before every question.

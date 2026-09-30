@@ -395,10 +395,11 @@ footer { max-width: 60rem; margin: 0 auto; padding: 2rem 1rem 3rem; border-top: 
 scripts/fetch-model.sh ~/models</code></pre>
       Pass <code>qwen3.5-2b</code>, <code>granite-4.0-h-tiny</code>, <code>granite-4.2-3b</code>,
       <code>smollm3-3b</code>, <code>gemma-4-e4b</code> or <code>muse-glimmer-30b</code> as a second argument for an
-      alternative.</li>
+      alternative, and <code>--mmproj</code> as a third to fetch the projector for image and audio requests.</li>
     <li><b>Serve.</b> Nothing needs installing:
 <pre><code>PYTHONPATH=src python3 -m llav --gguf ~/models/Qwen_Qwen3.5-4B-Q8_0.gguf --port 8080 --web-ui</code></pre>
-      <code>--web-ui</code> serves a page at <code>http://localhost:8080/</code> for trying questions in a browser.
+      <code>--web-ui</code> serves a page at <code>http://localhost:8080/</code> for trying questions in a browser,
+      with images and audio clips when the server runs with <code>--mmproj</code>.
       <figure>
         <a href="webui.png"><img src="webui-thumb.png" width="480" alt="The llav web UI answering a rating and a choice question about a support ticket"></a>
         <figcaption>The web UI, answering a rating and a choice question about a support ticket.</figcaption>
@@ -442,7 +443,10 @@ scripts/fetch-model.sh ~/models</code></pre>
     the questions are about, as a string or a JSON object or array. Each question has a <code>type</code>,
     <code>instructions</code> and <code>criteria</code>. The same handler answers at
     <code>POST /api/alpha/decisions</code>, OpenRouter's Decisions API path, and ignores that API's router
-    fields, so OpenRouter's SDKs can be pointed at llav by changing the base URL.</p>
+    fields, so OpenRouter's SDKs can be pointed at llav by changing the base URL. An optional
+    <code>images</code> array of base64 data URLs, llav's own extension, is read before the state when the
+    server was started with <code>--mmproj</code>, and an <code>audio</code> array (WAV, MP3, FLAC) when its
+    projector hears, as Gemma 4's does; accuracy on media is unmeasured.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Type</th><th style="text-align:left">criteria</th><th style="text-align:left">Answer</th></tr></thead>
     <tbody>
@@ -460,8 +464,8 @@ scripts/fetch-model.sh ~/models</code></pre>
       letters. Well below 1 means the model wanted to say something else, for example that no option fits.</li>
     <li><code>X-Llav-Calibration</code>: <code>none</code>, or the id of a temperature file loaded with
       <code>--calibration</code>.</li>
-    <li><code>X-Llav-Seconds</code>, <code>X-Llav-Shared-State-Tokens</code>, <code>X-Llav-State-Cache</code>:
-      timing and reuse.</li>
+    <li><code>X-Llav-Seconds</code>, <code>X-Llav-Shared-State-Tokens</code> (media tokens included),
+      <code>X-Llav-State-Cache</code>: timing and reuse.</li>
   </ul>
   <p>The full contract is in <a href="https://github.com/wistrand/llav/blob/main/openapi.json">openapi.json</a>,
     also served at <code>GET /openapi.json</code>.</p>
@@ -570,7 +574,7 @@ scripts/fetch-model.sh ~/models</code></pre>
 
 <section aria-labelledby="options">
   <h2 id="options">Options</h2>
-<pre><code>llav --gguf FILE [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
+<pre><code>llav --gguf FILE [--mmproj FILE] [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
      [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
      [--frame-ancestors ORIGIN ...] [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]

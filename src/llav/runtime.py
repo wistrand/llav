@@ -46,7 +46,8 @@ def _port_in_use(port: int) -> bool:
 
 class LlamaProcess:
     def __init__(self, binary: str, gguf: Path, port: int, slots: int, slot_ctx: int, slot_dir: Path,
-                 log_path: Path, extra: list[str], load_timeout: float = 900, scratch: Path | None = None):
+                 log_path: Path, extra: list[str], load_timeout: float = 900, scratch: Path | None = None,
+                 mmproj: Path | None = None):
         # Another server on the port would answer the readiness probe, and llav would silently share its
         # slots while this llama-server fails to bind and exits.
         if _port_in_use(port):
@@ -61,12 +62,15 @@ class LlamaProcess:
             # Models without sliding windows ignore the flag (agent_docs/comparisons.md).
             "--swa-full",
             "--jinja", "--chat-template-kwargs", json.dumps(TEMPLATE_KWARGS),
-            "--no-webui", *extra,
+            "--no-webui", *(["--mmproj", str(mmproj)] if mmproj else []), *extra,
         ]
         self.log_path = log_path
         self.log = log_path.open("a")
         try:
-            self.process = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT)
+            # Its own session, so a terminal's Ctrl-C reaches llav alone; llav then stops it with one SIGTERM.
+            # Two SIGINTs in a row make llama-server "terminate immediately", which has left it hung.
+            self.process = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT,
+                                            start_new_session=True)
         except BaseException:
             self.log.close()
             raise

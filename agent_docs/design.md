@@ -7,6 +7,7 @@
 - Model names
 - Usage and headers
 - Errors
+- Images and audio
 - Deliberate differences from Jev
 
 ## Source of the API shape
@@ -140,6 +141,37 @@ docs say only that the body "details the offending field"; the FastAPI-style sha
 Other errors use `{"detail": "<message>"}`. 529 carries `Retry-After`. The status table lives in the
 README; the exception mapping is in [architecture.md](architecture.md).
 
+## Images and audio
+
+llav extensions, since TypeSafe's state is text only and OpenAI's Decisions API takes images: optional
+top-level `images` and `audio` arrays of base64 data URLs (`parse_media`, at most `MAX_IMAGES` and
+`MAX_AUDIO` each in `questions.py`; audio as WAV, MP3 or FLAC, the formats llama.cpp decodes), read by the
+model before the state, images first. Separate fields keep the state serialization, and so the text
+prompt, unchanged. Prem's dgemma endpoint also takes media on the System One shape; its field is
+undocumented, so compatibility with it is unknown.
+
+- The prompt is the same template head, JSON payload and tail as for text, with one media marker per file
+  between the head and the payload, which is where llama-server's chat endpoint puts media sent before the
+  text. The projector's own begin and end tokens around each file come from llama.cpp, which tells images
+  from audio by their bytes. Text prompts stay byte-identical to SemIf's, so `PROMPT_VERSION` is
+  unchanged; calibration files are fitted on text and their effect on media questions is unmeasured.
+- llama-server accepts media only as a prompt string plus base64 `multimodal_data`, so this path sends
+  strings, not token ids; see [architecture.md](architecture.md#media-requests) for what that costs and
+  how caller text is still kept from forging control tokens.
+- Media requests are refused with 422 (`MediaRequestError`) when the projector lacks that modality (an
+  image-only projector refuses `audio` and says so), when the state or a question contains text that the
+  server would parse as a control token, or when the prompt does not fit the slot (the server's error,
+  mapped to the question as `ContextTooLong`).
+- `X-Llav-Shared-State-Tokens` counts media tokens too, since only the server can count them.
+- Accuracy with media is unmeasured beyond smoke tests (2026-09-30). Images on Qwen3.5-4B: solid red,
+  blue and green squares named with 0.97 to 0.996 probability, a two-image request answered per image, a
+  control-token state refused. Audio on Gemma 4 E4B, synthetic two-second clips: white noise named "noise"
+  at 0.95, but a 440 Hz tone and silence were both called "speech" (0.80 and 0.96) and "does the clip
+  contain human speech" was yes at 0.99999 for all three; with a red square attached alongside, the same
+  tone was named "tone" at 0.996 and the square "red". llama.cpp logs that its audio input "is in
+  experimental stage and may have reduced quality". Treat audio answers as unvalidated until measured on
+  real recordings. The native helper never sees media.
+
 ## Deliberate differences from Jev
 
 - At most 26 choice options (single-token letters `A`–`Z`); TypeSafe allows 255. Going further needs
@@ -154,3 +186,5 @@ README; the exception mapping is in [architecture.md](architecture.md).
   model. This changes the prompt for such questions, and with it their answers.
 - A choice key that is a single letter is shown at that answer letter, so the options may reach the model
   in a different order than the request gave them.
+- The request may carry `images` and `audio`, which TypeSafe's does not (see [Images and audio](#images-and-audio)),
+  and is also served at OpenRouter's `/api/alpha/decisions` path.

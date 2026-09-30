@@ -74,6 +74,8 @@ def main(argv: list[str] | None = None) -> None:
 
     spawn = parser.add_argument_group("managed llama-server")
     spawn.add_argument("--gguf", type=Path, help="Model file; llav starts llama-server with the required flags")
+    spawn.add_argument("--mmproj", type=Path, metavar="FILE",
+                       help="The model's multimodal projector file; enables the request's `images` and `audio`")
     spawn.add_argument("--llama-server", default="llama-server", help="llama-server binary")
     spawn.add_argument("--llama-port", type=int, default=8089)
     spawn.add_argument("--slots", type=int, default=1, help="Concurrent requests served by llama-server")
@@ -104,6 +106,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--state-cache must not be negative")
     if args.native_readout and not args.gguf:
         parser.error("--native-readout needs --gguf: the helper loads the model itself")
+    if args.mmproj and not args.gguf:
+        parser.error("--mmproj needs --gguf; an external llama-server loads its own projector")
     if args.frame_ancestors and not args.web_ui:
         parser.error("--frame-ancestors needs --web-ui")
     for origin in args.frame_ancestors:
@@ -132,6 +136,8 @@ def main(argv: list[str] | None = None) -> None:
         if args.gguf:
             if not args.gguf.is_file():
                 parser.error(f"No such model file: {args.gguf}")
+            if args.mmproj and not args.mmproj.is_file():
+                parser.error(f"No such projector file: {args.mmproj}")
             if calibration:  # before the slow start, so a mismatched file fails fast
                 sys.stderr.write(f"checking calibration {calibration.id} against {args.gguf.name}\n")
                 calibration.check_model(args.gguf, args.gguf.name)
@@ -140,7 +146,8 @@ def main(argv: list[str] | None = None) -> None:
             slot_dir.mkdir()
             sys.stderr.write(f"starting llama-server (log: {temporary / 'llama-server.log'})\n")
             process = LlamaProcess(args.llama_server, args.gguf, args.llama_port, args.slots, args.ctx,
-                                   slot_dir, temporary / "llama-server.log", args.llama_arg, scratch=temporary)
+                                   slot_dir, temporary / "llama-server.log", args.llama_arg, scratch=temporary,
+                                   mmproj=args.mmproj)
             client = LlamaClient(process.url)
             slots, slot_ctx, source = args.slots, args.ctx, args.gguf
         else:
@@ -159,6 +166,9 @@ def main(argv: list[str] | None = None) -> None:
             native = NativeReadout(args.native_readout, args.gguf, [], slot_ctx, args.native_questions)
         engine = Engine(client, slots, slot_ctx, slot_dir, args.queue_timeout, state_cache=args.state_cache,
                         native=native, assistant_prefix=args.assistant_prefix)
+        if any(engine.modalities.values()):
+            kinds = " and ".join(kind for kind, ok in engine.modalities.items() if ok)
+            sys.stderr.write(f"projector loaded: requests may carry {kinds}\n")
         if engine.profile.name != "default" or engine.assistant_prefix:
             sys.stderr.write(f"chat template profile {engine.profile.name}: assistant prefix "
                              f"{engine.assistant_prefix!r}, low candidate mass below {engine.profile.low_mass}\n")
@@ -181,6 +191,10 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        # A second Ctrl-C, or a SIGTERM during shutdown, would raise inside this block and abort it,
+        # orphaning a llama-server that is still terminating and leaving the scratch directory behind.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if native:
             native.close()
         if engine:

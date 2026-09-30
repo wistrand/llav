@@ -339,6 +339,16 @@ the state. Script and raw numbers: `agent_docs/experiments/scripts/orders-timing
 
 ## Open questions
 
+- Image requests, measured once on 2026-09-30 on the laptop with Qwen3.5-4B Q8_0 and its f16 projector,
+  one solid-colour PNG, one choice question, default `--ctx`: a 512 px image adds about 254 tokens and the
+  first request took 1.19 s, a 1024 px image about 1,022 tokens and 5.9 s; the repeat with the same image
+  and state was a slot-file hit at 0.14 s and 0.22 s. Three questions over two 64 px images took 1.23 s
+  cold and 0.43 s on the hit, with identical probabilities, so the restored prefix extends exactly. Per
+  model and per image size beyond that, and what the projector costs on a real GPU, are unmeasured. Audio,
+  measured once the same day on Gemma 4 E4B Q8_0 with its f16 projector: a two-second 16 kHz WAV added
+  about 47 tokens, two questions over it took 0.93 to 1.05 s cold and 0.38 s on the slot-file hit; a 64 px
+  image plus the clip, 184 prefix tokens and 1.3 s. The media path skips the native helper, so its
+  per-question cost is the HTTP path's.
 - The native helper batches questions on libllama as torch's shared mode does; a direct throughput
   comparison with SemIf's torch runner on the same GPU has not been run.
 - Why reading llama.cpp's logits buffer costs about ten times more than reading an ordinary array

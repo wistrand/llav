@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 import json
 import math
@@ -10,6 +12,8 @@ from .prompt import LABELS
 
 MAX_OPTIONS = len(LABELS)
 MAX_LEVELS = 10
+MAX_IMAGES = 4
+MAX_AUDIO = 4
 
 
 class ValidationError(Exception):
@@ -162,7 +166,7 @@ def parse_request(body) -> tuple[object, str, list[Question]]:
     """Validate a /v1/systemone (or /api/alpha/decisions) body and return (state, model, questions)."""
     if not isinstance(body, dict):
         raise ValidationError(["body"], "request body must be a JSON object")
-    unknown = set(body) - {"state", "model", "questions"} - IGNORED_FIELDS
+    unknown = set(body) - {"state", "model", "questions", "images", "audio"} - IGNORED_FIELDS
     if unknown:
         raise ValidationError(["body", sorted(unknown)[0]], "unknown field")
     state = body.get("state")
@@ -175,6 +179,33 @@ def parse_request(body) -> tuple[object, str, list[Question]]:
     if not isinstance(questions, dict) or not questions:
         raise ValidationError(["body", "questions"], "questions must be a nonempty object")
     return state, model, [parse_question(key, raw) for key, raw in questions.items()]
+
+
+def parse_media(body: dict) -> list[tuple[str, bytes]]:
+    """The decoded `images` and `audio` of a request, llav extensions: base64 data URLs the model reads
+    before the state, images first. Each item is (kind, bytes) with kind "image" or "audio"; an empty list
+    means a text-only request."""
+    decoded = []
+    for field, kind, limit, example in (("images", "image", MAX_IMAGES, "data:image/png;base64,..."),
+                                        ("audio", "audio", MAX_AUDIO, "data:audio/wav;base64,...")):
+        items = body.get(field)
+        if items is None:
+            continue
+        if not isinstance(items, list) or len(items) > limit:
+            raise ValidationError(["body", field], f"{field} must be an array of at most {limit} data URLs")
+        for index, item in enumerate(items):
+            loc = ["body", field, index]
+            header, separator, payload = item.partition(",") if isinstance(item, str) else ("", "", "")
+            if not separator or not header.startswith(f"data:{kind}/") or not header.endswith(";base64"):
+                raise ValidationError(loc, f"must be a data URL such as {example}")
+            try:
+                data = base64.b64decode(payload, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValidationError(loc, "invalid base64") from None
+            if not data:
+                raise ValidationError(loc, f"{kind} is empty")
+            decoded.append((kind, data))
+    return decoded
 
 
 def confidence(probabilities: list[float]) -> float:

@@ -133,7 +133,7 @@
                 },
                 "backend": {
                   "additionalProperties": true,
-                  "description": "llav-specific: runtime, model file, slots, per-slot context, the prefix-reuse path in use now (native_error says why the helper was dropped), the calibration id, the chat template profile with its assistant prefix, and the candidate mass below which an answer is flagged (low_candidate_mass).",
+                  "description": "llav-specific: runtime, model file, slots, per-slot context, the prefix-reuse path in use now (native_error says why the helper was dropped), the calibration id, the chat template profile with its assistant prefix, the candidate mass below which an answer is flagged (low_candidate_mass), and whether requests may carry images (images) and audio (audio).",
                   "type": "object"
                 },
                 "id": {
@@ -251,6 +251,24 @@
       "Request": {
         "additionalProperties": false,
         "properties": {
+          "audio": {
+            "description": "llav extension: base64 data URLs of WAV, MP3 or FLAC clips the model hears after the images and before the state. Needs a projector with an audio encoder (GET /v1/models reports backend.audio); otherwise a 422.",
+            "items": {
+              "pattern": "^data:audio/[^;]+;base64,",
+              "type": "string"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
+          "images": {
+            "description": "llav extension: base64 data URLs the model reads before the state. Needs a server started with --mmproj (GET /v1/models reports backend.images); otherwise, or when caller text contains chat control tokens, the request is a 422. Media requests do not use the native readout helper.",
+            "items": {
+              "pattern": "^data:image/[^;]+;base64,",
+              "type": "string"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
           "model": {
             "description": "The served model id or one of its aliases.",
             "enum": [
@@ -515,7 +533,7 @@
                 }
               },
               "X-Llav-Shared-State-Tokens": {
-                "description": "Prefix tokens shared by the questions, or 0.",
+                "description": "Prefix tokens shared by the questions, image tokens included, or 0.",
                 "schema": {
                   "type": "string"
                 }
@@ -746,7 +764,7 @@
                 }
               },
               "X-Llav-Shared-State-Tokens": {
-                "description": "Prefix tokens shared by the questions, or 0.",
+                "description": "Prefix tokens shared by the questions, image tokens included, or 0.",
                 "schema": {
                   "type": "string"
                 }

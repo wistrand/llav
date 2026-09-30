@@ -14,9 +14,9 @@ import traceback
 from urllib.parse import urlsplit
 
 from .calibration import Calibration
-from .engine import ContextTooLong, Engine, EngineError, Overloaded
+from .engine import ContextTooLong, Engine, EngineError, MediaRequestError, Overloaded
 from .openapi import document
-from .questions import ValidationError, build_answer, parse_request
+from .questions import ValidationError, build_answer, parse_media, parse_request
 
 MAX_BODY = 8 * 1024 * 1024
 # TypeSafe's path, and OpenRouter's Decisions API path, which carries the same body, so its SDKs can be
@@ -167,6 +167,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             state, model, questions = parse_request(body)
+            media = parse_media(body)
         except ValidationError as error:
             self._invalid(error.loc, error.message)
             return
@@ -174,9 +175,12 @@ class Handler(BaseHTTPRequestHandler):
             self._invalid(["body", "model"], f"Unknown model {model!r}; available: {sorted(self.app.accepted)}")
             return
         try:
-            results, usage, meta = self.app.engine.evaluate(state, questions)
+            results, usage, meta = self.app.engine.evaluate(state, questions, media)
         except ContextTooLong as error:
             self._invalid(["body", "questions", error.key], str(error))
+            return
+        except MediaRequestError as error:
+            self._invalid(error.loc, error.message)
             return
         except Overloaded as error:
             self._send(529, {"detail": str(error)}, {"Retry-After": "1"})

@@ -7,7 +7,7 @@ in the spec. `GET /openapi.json` serves it; `scripts/write-openapi.py` writes th
 from __future__ import annotations
 
 from . import __version__
-from .questions import IGNORED_FIELDS, MAX_LEVELS, MAX_OPTIONS
+from .questions import IGNORED_FIELDS, MAX_AUDIO, MAX_IMAGES, MAX_LEVELS, MAX_OPTIONS
 
 _PROBABILITIES = {
     "type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1},
@@ -44,7 +44,7 @@ def _decide(operation_id: str, summary: str) -> dict:
                     "X-Llav-Seconds": {"schema": {"type": "string"}, "description": "Engine time."},
                     "X-Llav-Shared-State-Tokens": {
                         "schema": {"type": "string"},
-                        "description": "Prefix tokens shared by the questions, or 0.",
+                        "description": "Prefix tokens shared by the questions, image tokens included, or 0.",
                     },
                     "X-Llav-State-Cache": {
                         "schema": {"type": "string", "enum": ["hit", "miss", "off"]},
@@ -154,6 +154,25 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
                                 {"$ref": "#/components/schemas/ChoiceQuestion"},
                                 {"$ref": "#/components/schemas/ScoreQuestion"},
                             ]},
+                        },
+                        "images": {
+                            "type": "array", "maxItems": MAX_IMAGES,
+                            "items": {"type": "string", "pattern": "^data:image/[^;]+;base64,"},
+                            "description": (
+                                "llav extension: base64 data URLs the model reads before the state. Needs a "
+                                "server started with --mmproj (GET /v1/models reports backend.images); "
+                                "otherwise, or when caller text contains chat control tokens, the request "
+                                "is a 422. Media requests do not use the native readout helper."
+                            ),
+                        },
+                        "audio": {
+                            "type": "array", "maxItems": MAX_AUDIO,
+                            "items": {"type": "string", "pattern": "^data:audio/[^;]+;base64,"},
+                            "description": (
+                                "llav extension: base64 data URLs of WAV, MP3 or FLAC clips the model hears "
+                                "after the images and before the state. Needs a projector with an audio "
+                                "encoder (GET /v1/models reports backend.audio); otherwise a 422."
+                            ),
                         },
                         **{name: {"description": "OpenRouter router field; accepted for its SDKs and ignored."}
                            for name in sorted(IGNORED_FIELDS)},
@@ -271,8 +290,9 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
                                                    "context, the prefix-reuse path in use now (native_error "
                                                    "says why the helper was dropped), the "
                                                    "calibration id, the chat template profile with its assistant "
-                                                   "prefix, and the candidate mass below which an answer is "
-                                                   "flagged (low_candidate_mass).",
+                                                   "prefix, the candidate mass below which an answer is "
+                                                   "flagged (low_candidate_mass), and whether requests may "
+                                                   "carry images (images) and audio (audio).",
                                     "additionalProperties": True,
                                 },
                             },

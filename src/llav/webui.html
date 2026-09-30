@@ -56,6 +56,12 @@ textarea:focus, input:focus { outline: 3px solid var(--accent-soft); border-colo
 .invalid { border-color: var(--bad) !important; background: var(--bad-soft); }
 #state { min-height: 120px; }
 .examples { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.images { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.thumb { position: relative; width: 56px; height: 56px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--field); flex: none; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb button { position: absolute; top: 2px; right: 2px; padding: 0 6px; line-height: 18px; font-size: 12px; border-radius: 999px; }
+.thumb.audio { width: auto; max-width: 160px; height: auto; padding: 8px 28px 8px 10px; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel.dropping { border-color: var(--accent); }
 button {
   font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
   padding: 7px 12px; cursor: pointer;
@@ -161,6 +167,11 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--field); borde
       <p class="lead">Paste a message, a review, a document or any other text. JSON works too.</p>
       <div class="panel">
         <textarea id="state" aria-label="Text to read" placeholder="For example: Help! My payouts have been failing for 3 days."></textarea>
+        <div class="images" id="images">
+          <button class="chip" id="add-image">+ Add image or audio</button>
+          <input id="image-file" type="file" accept="image/*,audio/*,.wav,.mp3,.flac" multiple hidden aria-label="Images and audio the model reads">
+          <span id="image-hint">Optional: up to 4 images and 4 audio clips (WAV, MP3, FLAC) the model reads before the text. Paste or drop them here too.</span>
+        </div>
         <div class="examples">Try an example:
           <button class="chip" data-example="support">Support ticket</button>
           <button class="chip" data-example="review">Product review</button>
@@ -207,6 +218,15 @@ const STORE = "llav-webui-v3";
 const $ = (selector) => document.querySelector(selector);
 let modelId = "llav-latest";
 let lastRequest = null;
+const MAX_PER_KIND = 4;
+const IMAGE_EDGE = 1024;  // larger images are scaled down: image tokens grow with the pixels
+const AUDIO_BYTES = 5 * 1024 * 1024;  // sent as is; the server's request limit is 8 MiB after base64
+const MAX_REQUEST = 7.5 * 1024 * 1024;  // all files encoded, leaving room for the text
+const AUDIO_TYPES = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac" };
+let media = [];  // {kind, name, url}: data URLs, kept in memory only, since they are too big for localStorage
+let supported = { image: null, audio: null };  // backend.images / backend.audio from /v1/models; null until known
+const ofKind = (kind) => media.filter((item) => item.kind === kind);
+const IDLE_HINT = "Optional: up to 4 images and 4 audio clips (WAV, MP3, FLAC) the model reads before the text. Paste or drop them here too.";
 let known = false;  // model id fetched; later polls only check health
 
 const TYPES = {
@@ -426,7 +446,126 @@ function buildRequest() {
     showFailure("Some fields need attention. They are marked in red.");
     return null;
   }
-  return { request: { state: parseState(stateBox.value), model: modelId, questions }, titles };
+  const request = { state: parseState(stateBox.value), model: modelId, questions };
+  if (ofKind("image").length) request.images = ofKind("image").map((item) => item.url);
+  if (ofKind("audio").length) request.audio = ofKind("audio").map((item) => item.url);
+  const bytes = media.reduce((sum, item) => sum + item.url.length, 0);
+  if (bytes > MAX_REQUEST) {
+    showFailure(`The files add up to ${(bytes / 1024 / 1024).toFixed(1)} MB encoded; the server takes 8 MB per request. Remove some.`);
+    return null;
+  }
+  return { request, titles };
+}
+
+// The developer view with each file replaced by its size: a data URL runs to megabytes.
+function abbreviate(request) {
+  const short = (url) => {
+    const bytes = Math.round((url.length - url.indexOf(",") - 1) * 3 / 4);
+    return `${url.slice(0, url.indexOf(",") + 1)}… (${(bytes / 1024).toFixed(0)} KB)`;
+  };
+  const out = { ...request };
+  if (out.images) out.images = out.images.map(short);
+  if (out.audio) out.audio = out.audio.map(short);
+  return out;
+}
+
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("not an image the browser can read"));
+    image.src = url;
+  });
+}
+
+// A PNG, JPEG or WebP that is small enough goes as it is; anything else is redrawn at most IMAGE_EDGE wide as JPEG.
+async function imageDataUrl(file) {
+  const original = await readFile(file);
+  const image = await loadImage(original);
+  const keep = ["image/png", "image/jpeg", "image/webp"].includes(file.type) && file.size <= 2 * 1024 * 1024;
+  if (keep && image.naturalWidth <= IMAGE_EDGE && image.naturalHeight <= IMAGE_EDGE) return original;
+  const scale = Math.min(1, IMAGE_EDGE / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.9);
+}
+
+// Audio goes as it is, with the type llama.cpp will see: browsers leave FLAC and some WAV files untyped.
+async function audioDataUrl(file) {
+  const extension = (file.name.split(".").pop() || "").toLowerCase();
+  const type = AUDIO_TYPES[extension] || (file.type.startsWith("audio/") ? file.type : "");
+  if (!type) throw new Error("use a WAV, MP3 or FLAC file");
+  if (file.size > AUDIO_BYTES) throw new Error(`the clip is ${(file.size / 1024 / 1024).toFixed(1)} MB; the limit is 5 MB`);
+  const url = await readFile(file);
+  return "data:" + type + url.slice(url.indexOf(";"));
+}
+
+function mediaKind(file) {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("audio/") || (file.name.split(".").pop() || "").toLowerCase() in AUDIO_TYPES) return "audio";
+  return null;
+}
+
+function renderMedia() {
+  const row = $("#images");
+  row.querySelectorAll(".thumb").forEach((node) => node.remove());
+  const chip = $("#add-image");
+  media.forEach((item, index) => {
+    const remove = el("button", { type: "button", title: `Remove ${item.name}`, "aria-label": `Remove ${item.name}`, text: "×" });
+    remove.addEventListener("click", () => { media.splice(index, 1); renderMedia(); });
+    const tile = item.kind === "image"
+      ? el("div", { class: "thumb" }, [el("img", { src: item.url, alt: item.name }), remove])
+      : el("div", { class: "thumb audio", title: item.name }, ["♪ " + item.name, remove]);
+    row.insertBefore(tile, chip);
+  });
+  const none = supported.image === false && supported.audio === false;
+  const full = ofKind("image").length >= MAX_PER_KIND && ofKind("audio").length >= MAX_PER_KIND;
+  chip.disabled = none || full;
+  const hint = $("#image-hint");
+  const refused = media.filter((item) => supported[item.kind] === false);
+  const counts = ["image", "audio"].filter((kind) => ofKind(kind).length)
+    .map((kind) => `${ofKind(kind).length} ${kind === "image" ? "image" : "audio clip"}${ofKind(kind).length === 1 ? "" : "s"}`);
+  if (none) {
+    hint.textContent = media.length
+      ? "This server was started without --mmproj, so it will refuse these files."
+      : "This server was started without --mmproj, so it cannot read images or audio.";
+  } else if (refused.length) {
+    hint.textContent = `This server's projector does not take ${refused[0].kind} input, so it will refuse ${refused[0].name}.`;
+  } else if (counts.length) {
+    hint.textContent = counts.join(" and ") + " will be read before the text."
+      + (supported.audio === false ? " This server takes images only." : "");
+  } else {
+    hint.textContent = IDLE_HINT + (supported.audio === false ? " This server takes images only." : "");
+  }
+}
+
+async function addMedia(files) {
+  for (const file of [...files]) {
+    const kind = mediaKind(file);
+    if (!kind) continue;
+    if (ofKind(kind).length >= MAX_PER_KIND) {
+      showFailure(`At most ${MAX_PER_KIND} ${kind === "image" ? "images" : "audio clips"} per request.`);
+      continue;
+    }
+    try {
+      const url = kind === "image" ? await imageDataUrl(file) : await audioDataUrl(file);
+      media.push({ kind, name: file.name || `pasted ${kind}`, url });
+    } catch (error) {
+      showFailure(`Could not add ${file.name || "the file"}.`, [error.message]);
+    }
+  }
+  renderMedia();
 }
 
 function pct(p) {
@@ -510,7 +649,11 @@ function explain(status, body, titles) {
   if (status === 422 && body && Array.isArray(body.detail)) {
     return ["The server could not accept these questions:", body.detail.map((d) => {
       const loc = d.loc || [];
-      const at = loc[1] === "questions" && loc[2] !== undefined ? `“${titles[loc[2]] || loc[2]}”: ` : "";
+      let at = "";
+      if (loc[1] === "questions" && loc[2] !== undefined) at = `“${titles[loc[2]] || loc[2]}”: `;
+      else if (loc[1] === "images") at = loc[2] !== undefined ? `Image ${loc[2] + 1}: ` : "Images: ";
+      else if (loc[1] === "audio") at = loc[2] !== undefined ? `Audio clip ${loc[2] + 1}: ` : "Audio: ";
+      else if (loc[1] === "state") at = "The text: ";
       return at + d.msg;
     })];
   }
@@ -543,7 +686,8 @@ async function run() {
   $("#answers").replaceChildren(el("div", { class: "panel placeholder" }, [
     el("div", { class: "spinner" }),
     el("strong", { text: `Asking ${count} question${count === 1 ? "" : "s"}…` }),
-    "The text is read once and shared by every question.",
+    media.length ? `The text and ${media.length} file${media.length === 1 ? "" : "s"} are read once and shared by every question.`
+      : "The text is read once and shared by every question.",
   ]));
   const started = performance.now();
   try {
@@ -554,7 +698,7 @@ async function run() {
     let body = null;
     try { body = JSON.parse(text); } catch (_) { /* not JSON */ }
     const massHeader = response.headers.get("X-Llav-Candidate-Mass");
-    $("#raw").textContent = "Request\n" + JSON.stringify(request, null, 2) + `\n\nResponse (HTTP ${response.status})\n`
+    $("#raw").textContent = "Request\n" + JSON.stringify(abbreviate(request), null, 2) + `\n\nResponse (HTTP ${response.status})\n`
       + (massHeader ? `X-Llav-Candidate-Mass: ${massHeader}\n` : "") + (body ? JSON.stringify(body, null, 2) : text);
     if (!response.ok) {
       const [message, details] = explain(response.status, body, titles);
@@ -590,6 +734,8 @@ function save() {
 function fill(data) {
   $("#state").value = data.state || "";
   $("#state").classList.remove("invalid");
+  media = [];
+  renderMedia();
   $("#questions").replaceChildren();
   for (const question of data.questions) addQuestion(question, false);
   save();
@@ -622,6 +768,10 @@ async function status() {
     const model = (await models.json()).data[0];
     modelId = model.id;
     if (model.backend && Number.isFinite(model.backend.low_candidate_mass)) lowMass = model.backend.low_candidate_mass;
+    for (const [kind, field] of [["image", "images"], ["audio", "audio"]]) {
+      supported[kind] = model.backend && typeof model.backend[field] === "boolean" ? model.backend[field] : null;
+    }
+    renderMedia();
     known = true;
     $("#status").textContent = "Ready · " + modelId;
   } catch (_) {
@@ -638,6 +788,23 @@ document.querySelectorAll("[data-add]").forEach((button) => {
 });
 $("#clear").addEventListener("click", () => fill({ state: "", questions: [{ type: "noul" }] }));
 $("#run").addEventListener("click", run);
+$("#add-image").addEventListener("click", () => $("#image-file").click());
+$("#image-file").addEventListener("change", async (event) => {
+  await addMedia(event.target.files);
+  event.target.value = "";
+});
+document.addEventListener("paste", (event) => {
+  const files = event.clipboardData ? [...event.clipboardData.files] : [];
+  if (files.some(mediaKind)) { event.preventDefault(); addMedia(files); }
+});
+const dropZone = $("#state").closest(".panel");
+dropZone.addEventListener("dragover", (event) => { event.preventDefault(); dropZone.classList.add("dropping"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dropping"));
+dropZone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  dropZone.classList.remove("dropping");
+  if (event.dataTransfer) addMedia(event.dataTransfer.files);
+});
 $("#key").addEventListener("change", () => { known = false; loaded = status(); });
 $("#copy-curl").addEventListener("click", async (event) => {
   const built = lastRequest ? { request: lastRequest } : buildRequest();

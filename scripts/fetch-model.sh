@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Download a pinned GGUF (Q8_0, or Q4_K_M for the 30B) and verify its SHA-256.
-#   scripts/fetch-model.sh [DIR] [MODEL]    (default: current directory, qwen3.5-4b)
+#   scripts/fetch-model.sh [DIR] [MODEL] [--mmproj]    (default: current directory, qwen3.5-4b)
+# --mmproj also downloads the model's pinned multimodal projector (f16), for llav's --mmproj flag and image
+# requests; available for qwen3.5-4b, qwen3.5-2b and gemma-4-e4b.
 # MODEL is one of:
 #   qwen3.5-4b          Qwen3.5-4B, the default; the validation in agent_docs/research.md used it
 #   qwen3.5-2b          Qwen3.5-2B, Apache 2.0; about twice as fast as the default on a long state
@@ -15,6 +17,9 @@ set -euo pipefail
 
 dir="${1:-.}"
 model="${2:-qwen3.5-4b}"
+want_mmproj="${3:-}"
+mmproj=""
+mmproj_sha256=""
 
 case "$model" in
   qwen3.5-4b)
@@ -22,12 +27,16 @@ case "$model" in
     revision=4168f45a16a1290d65a4ec0fa312ae917a4c15d6
     file=Qwen_Qwen3.5-4B-Q8_0.gguf
     sha256=5c74c0ede371924357dff0cb6ba145bd67208b9b2389ded681adfff3f7608db7
+    mmproj=mmproj-Qwen_Qwen3.5-4B-f16.gguf
+    mmproj_sha256=659b59dd44b73b1cd34af6cc424669484b06dc80f4340adf8ea84ad776eef813
     ;;
   qwen3.5-2b)
     repo=bartowski/Qwen_Qwen3.5-2B-GGUF
     revision=7d26695454df6de5fbcce2e58681e62dae06ce43
     file=Qwen_Qwen3.5-2B-Q8_0.gguf
     sha256=be647507ce6cde229b838924d47bfff9763171105563f7f908670dae57c4dbe2
+    mmproj=mmproj-Qwen_Qwen3.5-2B-f16.gguf
+    mmproj_sha256=044a0ea136cca70711ae16e23b24d754b44eab6f2462d187aee4d7c7a9503d36
     ;;
   granite-4.2-3b)
     repo=ibm-granite/granite-4.2-3b-GGUF
@@ -52,6 +61,8 @@ case "$model" in
     revision=029e94146666900b08caf49a3b47b413dfa8ec66
     file=google_gemma-4-E4B-it-Q8_0.gguf
     sha256=6a6eba0d36a051b5d924211a889c1436717006e7c5d413830c47caa1d46cb598
+    mmproj=mmproj-google_gemma-4-E4B-it-f16.gguf
+    mmproj_sha256=fd29ffa385f51ed8df3e8f48a865c7997ff6d01ed50c11bed2ae90f0d75f104e
     ;;
   muse-glimmer-30b)
     repo=meta-models/Muse-Glimmer-30B-GGUF
@@ -66,13 +77,31 @@ case "$model" in
     ;;
 esac
 
+if [ -n "$want_mmproj" ] && [ "$want_mmproj" != "--mmproj" ]; then
+  echo "Unknown option '$want_mmproj'; the third argument may only be --mmproj" >&2
+  exit 2
+fi
+if [ -n "$want_mmproj" ] && [ -z "$mmproj" ]; then
+  echo "No pinned projector for '$model'; --mmproj works with qwen3.5-4b, qwen3.5-2b and gemma-4-e4b" >&2
+  exit 2
+fi
+
 mkdir -p "$dir"
 cd "$dir"
-curl -fL --retry 5 -C - -o "$file" "https://huggingface.co/$repo/resolve/$revision/$file"
-# BSD sha256sum needs "-" to read the check list from stdin; older macOS has only shasum.
-if command -v sha256sum >/dev/null; then
-  echo "$sha256  $file" | sha256sum -c -
-else
-  echo "$sha256  $file" | shasum -a 256 -c -
-fi
+
+fetch() {  # fetch FILE SHA256: download from the pinned revision and verify
+  curl -fL --retry 5 -C - -o "$1" "https://huggingface.co/$repo/resolve/$revision/$1"
+  # BSD sha256sum needs "-" to read the check list from stdin; older macOS has only shasum.
+  if command -v sha256sum >/dev/null; then
+    echo "$2  $1" | sha256sum -c -
+  else
+    echo "$2  $1" | shasum -a 256 -c -
+  fi
+}
+
+fetch "$file" "$sha256"
 echo "Model ready: $(pwd)/$file"
+if [ -n "$want_mmproj" ]; then
+  fetch "$mmproj" "$mmproj_sha256"
+  echo "Projector ready: $(pwd)/$mmproj (pass it with --mmproj)"
+fi
