@@ -13,6 +13,7 @@ with an Intel Arc B390 iGPU, llama.cpp build 10809, Q8_0 GGUFs.
 - Comparison with Laya and von
 - Against the Jevals board
 - Jev through OpenRouter
+- OpenAI's Decisions API
 - The open decision-model ecosystem
 - Open questions
 
@@ -30,6 +31,7 @@ launch material, write-ups and project READMEs; only the rows marked measured we
 | Trained bidirectional encoder                   | Laya, von, openJev Verdict                            | Laya and von measured         |
 | Frozen LLM plus trained head                    | CLM, minojev, kev, JevForge                           | CLM measured                  |
 | Diffusion model                                 | OpenJev (DiffusionGemma)                              | not run                       |
+| Hosted chat model, constrained to given answers | Decisions API (OpenAI, preview)                       | not run, see below            |
 
 - **Jev** claims 70 to 500 ms, $0.042 per million input tokens, up to 255 options and calibrated
   probabilities from a training method it calls RLCD; size, base model and training data are undisclosed.
@@ -588,6 +590,41 @@ llav's order figure leaves out candidate selection, fixed since by `_align_lette
   Jev (1.7 s for a repeat of 10 questions on an 1,800-token text).
 - Throughput, one request at a time: 1,176 questions (about 1,145 requests) in 413 s and 8,072 rotations
   (976 requests) in 363 s, about 2.7 to 2.8 requests a second.
+
+## OpenAI's Decisions API
+
+Read on 2026-09-30 from launch coverage; OpenAI has published no reference, so check before citing.
+OpenAI announced the Decisions API at DevDay on 2026-09-29, in limited preview with broad release "in the
+coming days". Its recap describes it as focusing GPT-6 Luna, its smallest hosted model, "on a specific set of
+user-defined questions with finite pre-defined answers", over text or image context, for classifying
+content, routing requests and choosing an agent's next action. On stage it was called "lightning fast
+constrained decision making powered by Luna", about 150 ms against 1.6 s for a regular Luna call.
+
+- **What is known**: the endpoint is `POST /v1/decisions` (it answers unauthenticated calls with the
+  usual key error and accounts without access with "Decision API is not enabled for this user"); one
+  question per call, a closed list of answers, the chosen answer plus a confidence back. Not published:
+  the request and response schema, the model id, pricing, the option limit, whether a full distribution
+  over the options is returned, and how the confidence is produced. The wording suggests constrained
+  output from a chat model rather than a separate trained model like Jev; that is an inference.
+- **Only hands-on numbers so far**, from Every's DevDay write-up, informal and unreproduced: on a text-only
+  replay of computer tasks it got 76 of 78 steps right against Jev's 73, at a typical 230 ms against
+  500 ms; on multimodal thread classification the two tied on accuracy, medians 309 ms against Jev's 161.
+- **Against llav**: the shape is not System One compatible, so `scripts/evaluate.py` cannot score it until
+  someone writes an adapter and has access. The one third-party driver so far (Everruns, written without
+  access and marked provisional) treats choice as native and folds noul into a yes/no choice and score into
+  indexed levels, the same folding llav does in `prompt.py`. The comparison worth making once the reference
+  ships: whether it returns per-option probabilities or a single confidence for its pick, its order
+  sensitivity under `scripts/evaluate.py shifts`, and its price per decision against a local 4B pass.
+- **Not to be confused with OpenRouter's Decisions API**: `POST https://openrouter.ai/api/alpha/decisions`
+  is OpenRouter's own alpha router for decision models, taking `model`, `questions` and `state` in the
+  System One shape (its `/api/v1/systemone` is the same thing for TypeSafe's SDKs), with Jev as its only
+  model so far. llav answers at that path too (see [design.md](design.md#source-of-the-api-shape)). If
+  OpenAI's model lands there, `scripts/evaluate.py --model` could score it unchanged.
+- Sources: [OpenAI DevDay 2026 recap](https://openai.com/index/devday-2026-recap/),
+  [The New Stack](https://thenewstack.io/openai-decision-api-luna/),
+  [Every, Vibe Check DevDay 2026](https://every.to/vibe-check/vibe-check-openai-devday-2026),
+  [Everruns driver PR](https://github.com/everruns/everruns/pull/3924),
+  [OpenRouter Decisions API](https://openrouter.ai/docs/client-sdks/typescript/sdks/decisions).
 
 ## The open decision-model ecosystem
 

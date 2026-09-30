@@ -440,7 +440,9 @@ scripts/fetch-model.sh ~/models</code></pre>
   <h2 id="api">API</h2>
   <p><code>POST /v1/systemone</code> takes <code>{"state", "model", "questions"}</code>. <code>state</code> is the text
     the questions are about, as a string or a JSON object or array. Each question has a <code>type</code>,
-    <code>instructions</code> and <code>criteria</code>.</p>
+    <code>instructions</code> and <code>criteria</code>. The same handler answers at
+    <code>POST /api/alpha/decisions</code>, OpenRouter's Decisions API path, and ignores that API's router
+    fields, so OpenRouter's SDKs can be pointed at llav by changing the base URL.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Type</th><th style="text-align:left">criteria</th><th style="text-align:left">Answer</th></tr></thead>
     <tbody>

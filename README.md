@@ -141,7 +141,11 @@ their respective owners. llav reproduces the public request/response shape, not 
 
 ## API
 
-`POST /v1/systemone` takes `{"state", "model", "questions"}`:
+`POST /v1/systemone` takes `{"state", "model", "questions"}`. The same handler answers at
+`POST /api/alpha/decisions`, OpenRouter's Decisions API path, and ignores that API's router fields
+(`provider`, `session_id`, `trace`, `user`), so OpenRouter's SDKs can be pointed at llav by changing the
+base URL. Their model id must be one llav accepts, so serve under it (`--model-id typesafe/jev-1.13`) or send
+`jev-latest`.
 
 - **`state`** is the text the questions are about: a nonempty string, or a JSON object or array.
 - **`model`** is the served model id, `llav-latest` or `jev-latest` (`--no-jev-alias` refuses the last).

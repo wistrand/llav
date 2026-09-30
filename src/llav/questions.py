@@ -153,11 +153,16 @@ def parse_question(key: str, raw) -> Question:
     )
 
 
+# Optional fields in OpenRouter's Decisions request that only its router reads (provider routing and
+# observability). Accepted and ignored so its SDKs can be pointed at llav; anything else unknown is a typo.
+IGNORED_FIELDS = frozenset({"provider", "session_id", "trace", "user"})
+
+
 def parse_request(body) -> tuple[object, str, list[Question]]:
-    """Validate a /v1/systemone body and return (state, model, questions)."""
+    """Validate a /v1/systemone (or /api/alpha/decisions) body and return (state, model, questions)."""
     if not isinstance(body, dict):
         raise ValidationError(["body"], "request body must be a JSON object")
-    unknown = set(body) - {"state", "model", "questions"}
+    unknown = set(body) - {"state", "model", "questions"} - IGNORED_FIELDS
     if unknown:
         raise ValidationError(["body", sorted(unknown)[0]], "unknown field")
     state = body.get("state")

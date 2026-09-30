@@ -7,7 +7,7 @@ in the spec. `GET /openapi.json` serves it; `scripts/write-openapi.py` writes th
 from __future__ import annotations
 
 from . import __version__
-from .questions import MAX_LEVELS, MAX_OPTIONS
+from .questions import IGNORED_FIELDS, MAX_LEVELS, MAX_OPTIONS
 
 _PROBABILITIES = {
     "type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1},
@@ -29,6 +29,61 @@ def _error(description: str) -> dict:
         "schema": {"$ref": "#/components/schemas/Error"}}}}
 
 
+def _decide(operation_id: str, summary: str) -> dict:
+    """The decision operation; served at TypeSafe's path and at OpenRouter's."""
+    return {
+        "summary": summary,
+        "operationId": operation_id,
+        "security": [{"bearerAuth": []}],
+        "requestBody": {"required": True, "content": {"application/json": {
+            "schema": {"$ref": "#/components/schemas/Request"}}}},
+        "responses": {
+            "200": {
+                "description": "Every question answered.",
+                "headers": {
+                    "X-Llav-Seconds": {"schema": {"type": "string"}, "description": "Engine time."},
+                    "X-Llav-Shared-State-Tokens": {
+                        "schema": {"type": "string"},
+                        "description": "Prefix tokens shared by the questions, or 0.",
+                    },
+                    "X-Llav-State-Cache": {
+                        "schema": {"type": "string", "enum": ["hit", "miss", "off"]},
+                        "description": "Whether the state came from llav's state cache.",
+                    },
+                    "X-Llav-Calibration": {
+                        "schema": {"type": "string"},
+                        "description": (
+                            "The temperature calibration applied to the probabilities, as the first 12 "
+                            "hex digits of the calibration file's SHA-256, or 'none' for raw scores."
+                        ),
+                    },
+                    "X-Llav-Candidate-Mass": {
+                        "schema": {"type": "string"},
+                        "description": (
+                            "Per question, in answer order, comma-separated: the probability the "
+                            "model gave the declared option letters over its whole vocabulary. "
+                            "Near 1 when it answered with an option; low when it wanted another "
+                            "token, in which case the answer's probabilities are noise. It drops "
+                            "when the question has nothing to do with the text, not when the right "
+                            "answer is missing among plausible options. Not a measure of correctness."
+                        ),
+                    },
+                },
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Response"}}},
+            },
+            "400": _error("Content-Length is not a nonnegative integer."),
+            "401": _error("Missing or invalid API key."),
+            "411": _error("The body was sent with Transfer-Encoding; send it with Content-Length. "
+                          "Sent before the body is read, so the connection closes."),
+            "413": _error("The body exceeds the server's limit. Sent before the body is read, so "
+                          "a client still uploading may see the connection close instead."),
+            "422": _error("Validation failed; detail lists the field paths."),
+            "500": _error("The llama-server backend failed, or llav hit an internal error."),
+            "529": _error("All slots were busy; retry with backoff."),
+        },
+    }
+
+
 def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-latest", "jev-latest")) -> dict:
     """The served document. `model_id` and `aliases` name what this process actually accepts."""
     return {
@@ -46,57 +101,9 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
         },
         "servers": [{"url": "/"}],
         "paths": {
-            "/v1/systemone": {"post": {
-                "summary": "Answer typed questions about one state",
-                "operationId": "systemone",
-                "security": [{"bearerAuth": []}],
-                "requestBody": {"required": True, "content": {"application/json": {
-                    "schema": {"$ref": "#/components/schemas/Request"}}}},
-                "responses": {
-                    "200": {
-                        "description": "Every question answered.",
-                        "headers": {
-                            "X-Llav-Seconds": {"schema": {"type": "string"}, "description": "Engine time."},
-                            "X-Llav-Shared-State-Tokens": {
-                                "schema": {"type": "string"},
-                                "description": "Prefix tokens shared by the questions, or 0.",
-                            },
-                            "X-Llav-State-Cache": {
-                                "schema": {"type": "string", "enum": ["hit", "miss", "off"]},
-                                "description": "Whether the state came from llav's state cache.",
-                            },
-                            "X-Llav-Calibration": {
-                                "schema": {"type": "string"},
-                                "description": (
-                                    "The temperature calibration applied to the probabilities, as the first 12 "
-                                    "hex digits of the calibration file's SHA-256, or 'none' for raw scores."
-                                ),
-                            },
-                            "X-Llav-Candidate-Mass": {
-                                "schema": {"type": "string"},
-                                "description": (
-                                    "Per question, in answer order, comma-separated: the probability the "
-                                    "model gave the declared option letters over its whole vocabulary. "
-                                    "Near 1 when it answered with an option; low when it wanted another "
-                                    "token, in which case the answer's probabilities are noise. It drops "
-                                    "when the question has nothing to do with the text, not when the right "
-                                    "answer is missing among plausible options. Not a measure of correctness."
-                                ),
-                            },
-                        },
-                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Response"}}},
-                    },
-                    "400": _error("Content-Length is not a nonnegative integer."),
-                    "401": _error("Missing or invalid API key."),
-                    "411": _error("The body was sent with Transfer-Encoding; send it with Content-Length. "
-                                  "Sent before the body is read, so the connection closes."),
-                    "413": _error("The body exceeds the server's limit. Sent before the body is read, so "
-                                  "a client still uploading may see the connection close instead."),
-                    "422": _error("Validation failed; detail lists the field paths."),
-                    "500": _error("The llama-server backend failed, or llav hit an internal error."),
-                    "529": _error("All slots were busy; retry with backoff."),
-                },
-            }},
+            "/v1/systemone": {"post": _decide("systemone", "Answer typed questions about one state")},
+            "/api/alpha/decisions": {"post": _decide(
+                "decisions", "Alias of /v1/systemone at OpenRouter's Decisions API path, for its SDKs")},
             "/v1/models": {"get": {
                 "summary": "The served model, its aliases and backend details",
                 "operationId": "models",
@@ -148,6 +155,8 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
                                 {"$ref": "#/components/schemas/ScoreQuestion"},
                             ]},
                         },
+                        **{name: {"description": "OpenRouter router field; accepted for its SDKs and ignored."}
+                           for name in sorted(IGNORED_FIELDS)},
                     },
                 },
                 "NoulQuestion": {

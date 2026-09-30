@@ -25,6 +25,13 @@ not in the request's option order; `usage.output_tokens` reported (73 for three 
 not billed; a dated model id (`typesafe/jev-1.13-20260917`). OpenRouter adds `id`, `provider`,
 `usage.cost` and its own error shape.
 
+OpenRouter serves the same request and response schema at a second path, `POST /api/alpha/decisions`
+(its "Decisions API", the target of its SDKs and cookbooks; checked against its OpenAPI document on
+2026-09-30). llav answers at both paths, with one handler, and accepts and ignores the optional fields only
+OpenRouter's router reads: `provider`, `session_id`, `trace` and `user` (`IGNORED_FIELDS` in
+`questions.py`). Every other unknown field is still a 422, so typos stay caught. The response stays the
+System One shape: no `id`, `provider` or `usage.cost`.
+
 Questions carry their kind in a `type` field (`{"type": "noul", "instructions": ...}`), as TypeSafe's docs
 state: "A `Question` is one of three types, set by its `type` field" (checked 2026-09-24). CLM's README shows
 the kind as a wrapper key instead (`{"noul": {...}}`); its server accepts `type`, like llav. CLM also takes a

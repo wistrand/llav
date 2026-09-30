@@ -1,4 +1,4 @@
-"""HTTP front end: POST /v1/systemone, GET /v1/models, GET /health, GET /openapi.json."""
+"""HTTP front end: POST /v1/systemone (alias /api/alpha/decisions), GET /v1/models, GET /health, GET /openapi.json."""
 
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ from .openapi import document
 from .questions import ValidationError, build_answer, parse_request
 
 MAX_BODY = 8 * 1024 * 1024
+# TypeSafe's path, and OpenRouter's Decisions API path, which carries the same body, so its SDKs can be
+# pointed at llav with a base URL change.
+DECISION_ROUTES = ("/v1/systemone", "/api/alpha/decisions")
 # Seconds a client may stall while sending a request or idling on keep-alive before its thread is freed.
 SOCKET_TIMEOUT = 60
 WEB_UI = Path(__file__).with_name("webui.html")
@@ -132,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
         # Responses sent before the body is read close the connection so the unread body is not
         # parsed as the next request.
         close = {"Connection": "close"}
-        if self._route() != "/v1/systemone":
+        if self._route() not in DECISION_ROUTES:
             self._send(404, {"detail": "Not found"}, close)
             return
         if not self._authorized():

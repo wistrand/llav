@@ -159,6 +159,15 @@ class QuestionTest(unittest.TestCase):
                 parse_request(body)
             self.assertEqual(caught.exception.loc, loc)
 
+    def test_ignores_openrouter_router_fields(self):
+        body = dict(request({"a": {"type": "noul", "instructions": "q"}}), provider={"sort": "price"},
+                    session_id="s", trace={"trace_id": "t"}, user="u")
+        state, model, questions = parse_request(body)
+        self.assertEqual((state, model, len(questions)), ("Payouts failing for 3 days.", "llav-latest", 1))
+        with self.assertRaises(ValidationError) as caught:
+            parse_request(dict(body, temperature=1.0))
+        self.assertEqual(caught.exception.loc, ["body", "temperature"])
+
     def test_confidence_bounds(self):
         self.assertAlmostEqual(confidence([1.0, 0.0, 0.0]), 1.0)
         self.assertAlmostEqual(confidence([0.5, 0.5]), 0.0)
@@ -776,6 +785,12 @@ class ServerTest(unittest.TestCase):
                 status, headers, _ = self.exchange(port, head)
                 self.assertEqual(status, expected)
                 self.assertTrue(headers["closed"])
+
+    def test_openrouter_decisions_path_is_an_alias(self):
+        head = f"POST /api/alpha/decisions HTTP/1.1\nHost: x\nContent-Length: {len(self.BODY)}\n"
+        status, _, data = self.exchange(self.serve(), head, self.BODY)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["answers"]["a"], {"type": "noul", "noul": 0.75})
 
     def test_bearer_scheme_is_case_insensitive(self):
         port = self.serve(api_key="secret")
