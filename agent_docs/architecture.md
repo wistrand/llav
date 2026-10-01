@@ -47,6 +47,7 @@ llama-server's HTTP API, and shapes answers. Global rules are in
 | `document`      | `openapi.py`     | OpenAPI 3.1 spec from the code; served at `/openapi.json`                  |
 | `NativeReadout` | `native.py`      | Optional helper process: one batched pass for all questions                |
 | `Calibration`   | `calibration.py` | Optional per-type temperature from `--calibration`; checks the model       |
+| `CostMeter`     | `cost.py`        | Optional `--cost-per-hour` price into the `X-Llav-Cost-*` headers          |
 | `detect`        | `templates.py`   | Template profile: assistant prefix and low-mass cue from the rendered text |
 | `parse_request` | `questions.py`   | Validate the body into `(state, model, [Question])`                        |
 | `parse_media`   | `questions.py`   | Decode the optional `images` and `audio` data URLs                         |
@@ -81,7 +82,8 @@ llama-server's HTTP API, and shapes answers. Global rules are in
    (`Calibration.apply`); the answer letter never changes. Candidate mass stays raw.
 8. `build_answer` shapes each answer; timing goes into `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`,
    each question's candidate mass into `X-Llav-Candidate-Mass`, and the calibration id or `none` into
-   `X-Llav-Calibration`.
+   `X-Llav-Calibration`. With a `CostMeter`, the request's wall time (from before the body was read),
+   engine seconds and evaluated tokens are recorded and the `X-Llav-Cost-*` headers added.
 
 ## Shared-state flow
 

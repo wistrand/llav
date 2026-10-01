@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from llav import calibration  # noqa: E402
 from llav.calibration import Calibration, CalibrationError  # noqa: E402
 from llav.cli import main  # noqa: E402
+from llav.cost import CostMeter  # noqa: E402
 from llav.engine import ContextTooLong, Engine, EngineError, LlamaClient, MediaRequestError  # noqa: E402
 from llav.native import NativeError, NativeReadout  # noqa: E402
 from llav.openapi import document  # noqa: E402
@@ -850,9 +851,9 @@ class OpenApiTest(unittest.TestCase):
 class ServerTest(unittest.TestCase):
     BODY = json.dumps(request({"a": {"type": "noul", "instructions": "q"}})).encode()
 
-    def serve(self, engine=None, api_key=None, timeout=None, web_ui=None, frame_ancestors=()) -> int:
+    def serve(self, engine=None, api_key=None, timeout=None, web_ui=None, frame_ancestors=(), cost=None) -> int:
         app = App(engine or FakeEngine(), "llav-test", ["llav-latest"], api_key, {}, web_ui=web_ui,
-                  frame_ancestors=frame_ancestors)
+                  frame_ancestors=frame_ancestors, cost=cost)
         overrides = {"app": app, "log_message": lambda *args: None}
         if timeout:
             overrides["timeout"] = timeout
@@ -972,6 +973,17 @@ class ServerTest(unittest.TestCase):
         status, _, data = self.exchange(port, self.post_head(str(len(body))), body)
         self.assertEqual((status, json.loads(data)["detail"][0]["loc"]), (422, ["body", "images"]))
 
+    def test_cost_headers_only_with_a_price(self):
+        status, headers, _ = self.exchange(self.serve(), self.post_head(str(len(self.BODY))), self.BODY)
+        self.assertEqual(status, 200)
+        self.assertNotIn("x-llav-cost", headers)
+        port = self.serve(cost=CostMeter(36.0))  # one cent per second
+        status, headers, _ = self.exchange(port, self.post_head(str(len(self.BODY))), self.BODY)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["x-llav-cost"], "0.000000")  # the fake engine reports 0 s
+        self.assertEqual(headers["x-llav-cost-per-mtok"], "0.0000")
+        self.assertGreater(float(headers["x-llav-cost-per-mtok-elapsed"]), 0)  # wall time passed, 1 token
+
     def test_openrouter_decisions_path_is_an_alias(self):
         head = f"POST /api/alpha/decisions HTTP/1.1\nHost: x\nContent-Length: {len(self.BODY)}\n"
         status, _, data = self.exchange(self.serve(), head, self.BODY)
@@ -1067,6 +1079,11 @@ class CliTest(unittest.TestCase):
             with self.subTest(flags=flags), mock.patch("sys.stderr"), self.assertRaises(SystemExit):
                 main(["--gguf", "model.gguf", *flags])
 
+    def test_cost_per_hour_must_be_positive(self):
+        for value in ("0", "-1"):
+            with self.subTest(value=value), mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                main(["--gguf", "model.gguf", "--cost-per-hour", value])
+
     def test_mmproj_needs_a_managed_server(self):
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
             main(["--llama-url", "http://127.0.0.1:1", "--slot-dir", "/tmp", "--mmproj", "proj.gguf"])
@@ -1103,6 +1120,25 @@ def write_calibration(directory: Path, sha256: str, **changes) -> Path:
     path = directory / "calibration.json"
     path.write_text(json.dumps(document))
     return path
+
+
+class CostMeterTest(unittest.TestCase):
+    def test_rolling_figures(self):
+        clock = [0.0]
+        meter = CostMeter(3.6, clock=lambda: clock[0])  # 0.001 USD per second
+        clock[0] = 2.0
+        first = meter.record(started=0.0, seconds=0.5, tokens=1000)
+        self.assertEqual(first, {"X-Llav-Cost": "0.000500", "X-Llav-Cost-Per-Mtok": "0.5000",
+                                 "X-Llav-Cost-Per-Mtok-Elapsed": "2.0000"})
+        clock[0] = 6.0
+        second = meter.record(started=5.0, seconds=1.0, tokens=3000)
+        # Busy: 1.5 s over 4,000 tokens; elapsed: 6 s since the first request started.
+        self.assertEqual(second, {"X-Llav-Cost": "0.001000", "X-Llav-Cost-Per-Mtok": "0.3750",
+                                  "X-Llav-Cost-Per-Mtok-Elapsed": "1.5000"})
+
+    def test_no_tokens_means_no_per_token_figure(self):
+        meter = CostMeter(3.6, clock=lambda: 1.0)
+        self.assertEqual(meter.record(started=0.0, seconds=0.2, tokens=0), {"X-Llav-Cost": "0.000200"})
 
 
 class CalibrationTest(unittest.TestCase):

@@ -13,6 +13,7 @@ import tempfile
 
 from . import __version__
 from .calibration import Calibration, CalibrationError
+from .cost import CostMeter
 from .engine import Engine, EngineError, LlamaClient
 from .native import NativeError, NativeReadout
 from .runtime import LlamaProcess
@@ -69,6 +70,9 @@ def main(argv: list[str] | None = None) -> None:
                         help="Template text between the chat template's generation prompt and the answer letter, "
                              "for templates that make the model write a header first (default: chosen from the "
                              "template, e.g. ' to=user<|message|>' for Muse Glimmer; '' for none)")
+    parser.add_argument("--cost-per-hour", type=float, metavar="USD",
+                        help="What this server costs per hour; responses then carry X-Llav-Cost-* headers "
+                             "estimating each request's share and a rolling price per million tokens")
     parser.add_argument("--calibration", type=Path, metavar="FILE",
                         help="Temperature calibration from 'scripts/evaluate.py fit'; must match the model")
 
@@ -116,6 +120,8 @@ def main(argv: list[str] | None = None) -> None:
             parser.error(f"--frame-ancestors expects an origin such as https://example.com, not {origin!r}")
     if args.native_questions < 1:
         parser.error("--native-questions must be at least 1")
+    if args.cost_per_hour is not None and not args.cost_per_hour > 0:
+        parser.error("--cost-per-hour must be positive")
 
     calibration = None
     if args.calibration:
@@ -180,11 +186,13 @@ def main(argv: list[str] | None = None) -> None:
         backend = {"runtime": "llama.cpp", "model_file": source.name, "slots": slots, "slot_ctx": slot_ctx,
                    **engine.backend_status(),
                    "calibration": calibration.id if calibration else None,
+                   "cost_per_hour": args.cost_per_hour,
                    "template_profile": engine.profile.name, "assistant_prefix": engine.assistant_prefix,
                    "low_candidate_mass": engine.profile.low_mass}
         web_ui = WEB_UI.read_bytes() if args.web_ui else None
         serve(httpd, App(engine, model_id, aliases, args.api_key, backend, health, web_ui, calibration,
-                         frame_ancestors=args.frame_ancestors))
+                         frame_ancestors=args.frame_ancestors,
+                         cost=CostMeter(args.cost_per_hour) if args.cost_per_hour else None))
     except (CalibrationError, EngineError, NativeError, RuntimeError, OSError) as error:
         sys.stderr.write(f"llav: {error}\n")
         sys.exit(1)

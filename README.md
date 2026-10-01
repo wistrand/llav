@@ -190,6 +190,12 @@ base URL. Their model id must be one llav accepts, so serve under it (`--model-i
 - Every response carries `X-Llav-Seconds`, `X-Llav-Shared-State-Tokens` (media tokens included) and
   `X-Llav-State-Cache` (`hit`, `miss` or `off`).
 - `X-Llav-Calibration` is `none`, or the id of the temperature file loaded with `--calibration`.
+- With `--cost-per-hour USD` (what the machine costs you: a rented GPU's rate, a Space's hardware tier),
+  every answer carries `X-Llav-Cost`, the request's engine time at that price, and two rolling averages
+  over the last 100 requests in USD per million evaluated tokens: `X-Llav-Cost-Per-Mtok` over engine time
+  (what tokens cost while the server is busy) and `X-Llav-Cost-Per-Mtok-Elapsed` over the wall time those
+  requests spanned, idle included (what they cost at the current load). A cached state counts no tokens,
+  since it costs nothing; the response body stays unchanged.
 - `X-Llav-Candidate-Mass` lists, per question in answer order, the probability the model gave the option
   letters over its whole vocabulary, for example `0.9991,0.9874`. Well below 1 means the model wanted to
   say something else and the answer's probabilities are not worth reading; that happens when the question
@@ -315,6 +321,7 @@ estimates for other hardware and what a text-generating baseline would cost are 
 llav --gguf FILE [--mmproj FILE] [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
      [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
      [--frame-ancestors ORIGIN ...] [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
+     [--cost-per-hour USD]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
 
 llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own llama-server

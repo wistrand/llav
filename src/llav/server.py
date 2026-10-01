@@ -14,6 +14,7 @@ import traceback
 from urllib.parse import urlsplit
 
 from .calibration import Calibration
+from .cost import CostMeter
 from .engine import ContextTooLong, Engine, EngineError, MediaRequestError, Overloaded
 from .openapi import document
 from .questions import ValidationError, build_answer, parse_media, parse_request
@@ -52,7 +53,8 @@ class Server(ThreadingHTTPServer):
 class App:
     def __init__(self, engine: Engine, model_id: str, aliases: list[str], api_key: str | None,
                  backend: dict, health=lambda: True, web_ui: bytes | None = None,
-                 calibration: Calibration | None = None, frame_ancestors: tuple[str, ...] | list[str] = ()):
+                 calibration: Calibration | None = None, frame_ancestors: tuple[str, ...] | list[str] = (),
+                 cost: CostMeter | None = None):
         self.engine = engine
         self.model_id = model_id
         self.accepted = {model_id, *aliases}
@@ -63,6 +65,7 @@ class App:
         self.web_ui = web_ui
         self.web_ui_policy = web_ui_policy(frame_ancestors)
         self.calibration = calibration
+        self.cost = cost
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -135,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
         # Responses sent before the body is read close the connection so the unread body is not
         # parsed as the next request.
         close = {"Connection": "close"}
+        started = self.app.cost.now() if self.app.cost else 0.0
         if self._route() not in DECISION_ROUTES:
             self._send(404, {"detail": "Not found"}, close)
             return
@@ -196,13 +200,16 @@ class Handler(BaseHTTPRequestHandler):
         if calibration:
             results = [calibration.apply(question.type, p) for question, p in zip(questions, results)]
         answers = {question.key: build_answer(question, p) for question, p in zip(questions, results)}
-        self._send(200, {"model": self.app.model_id, "answers": answers, "usage": usage}, {
+        headers = {
             "X-Llav-Seconds": f"{meta['seconds']:.3f}",
             "X-Llav-Shared-State-Tokens": str(meta["shared_state_tokens"]),
             "X-Llav-State-Cache": meta["state_cache"],
             "X-Llav-Candidate-Mass": ",".join(f"{mass:.4f}" for mass in meta["candidate_mass"]),
             "X-Llav-Calibration": calibration.id if calibration else "none",
-        })
+        }
+        if self.app.cost:
+            headers.update(self.app.cost.record(started, meta["seconds"], usage["input_tokens"]))
+        self._send(200, {"model": self.app.model_id, "answers": answers, "usage": usage}, headers)
 
 
 def bind(host: str, port: int) -> Server:

@@ -466,6 +466,9 @@ scripts/fetch-model.sh ~/models</code></pre>
       <code>--calibration</code>.</li>
     <li><code>X-Llav-Seconds</code>, <code>X-Llav-Shared-State-Tokens</code> (media tokens included),
       <code>X-Llav-State-Cache</code>: timing and reuse.</li>
+    <li><code>X-Llav-Cost</code>, <code>X-Llav-Cost-Per-Mtok</code>, <code>X-Llav-Cost-Per-Mtok-Elapsed</code>:
+      with <code>--cost-per-hour USD</code>, this request's engine time at that price and rolling prices per
+      million evaluated tokens over busy time and over wall time.</li>
   </ul>
   <p>The full contract is in <a href="https://github.com/wistrand/llav/blob/main/openapi.json">openapi.json</a>,
     also served at <code>GET /openapi.json</code>.</p>
@@ -577,6 +580,7 @@ scripts/fetch-model.sh ~/models</code></pre>
 <pre><code>llav --gguf FILE [--mmproj FILE] [--port 8080] [--host 127.0.0.1] [--slots 1] [--ctx 8192]
      [--api-key KEY] [--model-id ID] [--no-jev-alias] [--queue-timeout 30] [--state-cache 4] [--web-ui]
      [--frame-ancestors ORIGIN ...] [--native-readout BIN] [--native-questions 16] [--calibration FILE] [--assistant-prefix TEXT]
+     [--cost-per-hour USD]
      [--llama-server BIN] [--llama-port 8089] [--llama-arg ARG ...]
 
 llav --llama-url http://127.0.0.1:8089 --slot-dir DIR   # attach to your own llama-server</code></pre>

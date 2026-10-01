@@ -133,7 +133,7 @@
                 },
                 "backend": {
                   "additionalProperties": true,
-                  "description": "llav-specific: runtime, model file, slots, per-slot context, the prefix-reuse path in use now (native_error says why the helper was dropped), the calibration id, the chat template profile with its assistant prefix, the candidate mass below which an answer is flagged (low_candidate_mass), and whether requests may carry images (images) and audio (audio).",
+                  "description": "llav-specific: runtime, model file, slots, per-slot context, the prefix-reuse path in use now (native_error says why the helper was dropped), the calibration id, the chat template profile with its assistant prefix, the candidate mass below which an answer is flagged (low_candidate_mass), whether requests may carry images (images) and audio (audio), and the --cost-per-hour price (cost_per_hour) or null.",
                   "type": "object"
                 },
                 "id": {
@@ -526,6 +526,12 @@
                   "type": "string"
                 }
               },
+              "X-Llav-Cost": {
+                "description": "USD this request's engine time cost at the server's --cost-per-hour price; only when that flag was given. Backed by X-Llav-Cost-Per-Mtok (a rolling average over the engine time of the last 100 requests, USD per million evaluated tokens) and X-Llav-Cost-Per-Mtok-Elapsed (the same over the wall time they spanned, idle included: the price at the current load).",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Llav-Seconds": {
                 "description": "Engine time.",
                 "schema": {
@@ -753,6 +759,12 @@
               },
               "X-Llav-Candidate-Mass": {
                 "description": "Per question, in answer order, comma-separated: the probability the model gave the declared option letters over its whole vocabulary. Near 1 when it answered with an option; low when it wanted another token, in which case the answer's probabilities are noise. It drops when the question has nothing to do with the text, not when the right answer is missing among plausible options. Not a measure of correctness.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Llav-Cost": {
+                "description": "USD this request's engine time cost at the server's --cost-per-hour price; only when that flag was given. Backed by X-Llav-Cost-Per-Mtok (a rolling average over the engine time of the last 100 requests, USD per million evaluated tokens) and X-Llav-Cost-Per-Mtok-Elapsed (the same over the wall time they spanned, idle included: the price at the current load).",
                 "schema": {
                   "type": "string"
                 }

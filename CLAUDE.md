@@ -32,6 +32,7 @@ client ──HTTP──> server.py ──> questions.py (validate, build answers
 | `src/llav/openapi.py`      | `document()`: the OpenAPI 3.1 spec, built from the code                |
 | `src/llav/native.py`       | `NativeReadout`: the optional helper's process and protocol            |
 | `src/llav/calibration.py`  | `Calibration`: optional per-type temperature file, model hash check    |
+| `src/llav/cost.py`         | `CostMeter`: `--cost-per-hour` into the `X-Llav-Cost-*` headers         |
 | `src/llav/templates.py`    | `detect()`: per-template defaults (assistant prefix, low-mass cue)     |
 | `native/llav-readout.cpp`  | That helper: batched readout against libllama; see native/README.md    |
 | `tests/test_llav.py`       | Unit tests with a fake llama-server; no model needed                   |

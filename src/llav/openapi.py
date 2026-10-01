@@ -57,6 +57,16 @@ def _decide(operation_id: str, summary: str) -> dict:
                             "hex digits of the calibration file's SHA-256, or 'none' for raw scores."
                         ),
                     },
+                    "X-Llav-Cost": {
+                        "schema": {"type": "string"},
+                        "description": (
+                            "USD this request's engine time cost at the server's --cost-per-hour price; "
+                            "only when that flag was given. Backed by X-Llav-Cost-Per-Mtok (a rolling "
+                            "average over the engine time of the last 100 requests, USD per million "
+                            "evaluated tokens) and X-Llav-Cost-Per-Mtok-Elapsed (the same over the wall "
+                            "time they spanned, idle included: the price at the current load)."
+                        ),
+                    },
                     "X-Llav-Candidate-Mass": {
                         "schema": {"type": "string"},
                         "description": (
@@ -291,8 +301,9 @@ def document(model_id: str = "llav-<model>", aliases: tuple[str, ...] = ("llav-l
                                                    "says why the helper was dropped), the "
                                                    "calibration id, the chat template profile with its assistant "
                                                    "prefix, the candidate mass below which an answer is "
-                                                   "flagged (low_candidate_mass), and whether requests may "
-                                                   "carry images (images) and audio (audio).",
+                                                   "flagged (low_candidate_mass), whether requests may "
+                                                   "carry images (images) and audio (audio), and the "
+                                                   "--cost-per-hour price (cost_per_hour) or null.",
                                     "additionalProperties": True,
                                 },
                             },

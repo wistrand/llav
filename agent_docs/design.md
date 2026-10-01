@@ -131,6 +131,11 @@ unchanged; responses always carry llav's own id.
   proxies reject; and a JavaScript client that sends hand-written JSON with integer-like question keys gets
   `answers` back reordered by its JSON parser, which puts integer keys first, so positions no longer line
   up. Clients that build the body from their own parsed object are unaffected.
+- `--cost-per-hour` adds `X-Llav-Cost` (this request's engine seconds at that price) and two rolling
+  averages over the last `WINDOW` requests in `cost.py`, USD per million evaluated tokens: over engine
+  time and over the wall time the window spans. Evaluated tokens are `usage.input_tokens`, so a cached
+  state is free, which is true of its compute. The hourly price is the only input; llav never guesses
+  it, and nothing goes in `usage`, where OpenRouter puts `cost`.
 - Timing and sharing details go in `X-Llav-Seconds` and `X-Llav-Shared-State-Tokens`, not in `usage`, so
   strict clients that validate `usage` keep working.
 
