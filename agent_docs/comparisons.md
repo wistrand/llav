@@ -14,6 +14,7 @@ with an Intel Arc B390 iGPU, llama.cpp build 10809, Q8_0 GGUFs.
 - Against the Jevals board
 - Jev through OpenRouter
 - OpenAI's Decisions API
+- Decision endpoints in the runtimes
 - The open decision-model ecosystem
 - Open questions
 
@@ -687,6 +688,56 @@ constrained decision making powered by Luna", about 150 ms against 1.6 s for a r
   [Every, Vibe Check DevDay 2026](https://every.to/vibe-check/vibe-check-openai-devday-2026),
   [Everruns driver PR](https://github.com/everruns/everruns/pull/3924),
   [OpenRouter Decisions API](https://openrouter.ai/docs/client-sdks/typescript/sdks/decisions).
+
+## Decision endpoints in the runtimes
+
+Surveyed 2026-09-30 from llama.cpp, Ollama and SGLang pull requests and discussions; check before citing.
+llav pins llama.cpp build 10809 (2026-09-04); the newest that day was b11299.
+
+- **llama.cpp has merged nothing decision-specific.** PR #29321 (2026-09-23, open, no maintainer review)
+  adds a `tools/system-one` library and CLI, not a server route: four readouts (next-token letters as
+  llav, a mask slot for bidirectional models, a scored slot, a classification head ranking one sequence
+  per option), a prompt stored in the GGUF as a named Jinja template, and GGUF keys for the answer labels
+  and segment separators. A `/v1/systemone` server task is listed as a follow-up. PR #29363 adds Laya as
+  an architecture with its own runtime. Discussions #29268, #29269 and #29693 ask for a native route with
+  no maintainer reply; the claim that llama.cpp "will not add it" is from a contributor's PR elsewhere.
+  Forks serve it (kishida's `jev` branch with images, espetro's with Kev), unmergeable by their authors'
+  account.
+- **The runtimes around it moved instead.** Ollama 0.35 serves `/v1/systemone` from Go over an unmodified
+  llama-server; SGLang merged `/v1/decisions` and `/v1/systemone` on 2026-09-25, with a server-owned,
+  versioned prompt, a `label_mass` field that is llav's candidate mass, prompt-id replay through
+  `/v1/score`, and up to 255 options through two-letter labels where the tokenizer allows.
+- **Merged since build 10809 on llav's path:** nothing on `n_probs`, `/completion`, `/tokenize` or
+  `/apply-template`; a fix so a failed per-sequence restore leaves no stale state (#27530), and
+  multimodal input sanity checks (#29276). Recurrent-state rollback lists Qwen3.5 on master but serves
+  speculative decoding only, so the slot-file design in [architecture.md](architecture.md) stands. Open
+  and worth watching: on ROCm the fused Gated Delta Net op carries recurrent state across requests on a
+  reused slot (#29092); llav erases the slot before priming, but the bug is below the memory API, so llav
+  on HIP is not shown safe. Moving the pin to a current build looks safe from the change list; untested.
+- **One measurement in PR #29321 backs llav's design.** Five questions packed into one prompt dropped stock
+  Qwen3.5-0.8B from 0.699 to 0.544 and Gemma 4 E2B from 0.765 to 0.541: a causal model that has seen
+  unanswered slots stops answering. Only checkpoints trained for that format gain (0.965 to 0.973, and
+  629 ms against 1,049 ms for five questions). llav's separate suffixes over a shared prefix avoid this;
+  decider's order effect in [the ecosystem section](#the-open-decision-model-ecosystem) is the same thing.
+- **Two techniques to weigh.** Ollama reads an exact probability for every candidate, even below the
+  returned top set, by giving all candidates the same `logit_bias`, setting `top_k` to their count and
+  reading `post_sampling_probs`; equal bias keeps the candidates' relative logits. llav floors a label
+  outside its returned tokens instead. The trick loses the vocabulary share that candidate mass reports,
+  and [CLAUDE.md](../CLAUDE.md#invariants) forbids both fields, so it is a trade to decide, not a fix.
+  SGLang's two-letter labels would lift the 26-option limit at the cost of a second readout token, which
+  is a prompt-format change with a re-measurement.
+- Sources: [PR #29321](https://github.com/ggml-org/llama.cpp/pull/29321),
+  [PR #29363](https://github.com/ggml-org/llama.cpp/pull/29363),
+  [issue #29022](https://github.com/ggml-org/llama.cpp/issues/29022),
+  [issue #29092](https://github.com/ggml-org/llama.cpp/issues/29092),
+  [PR #27530](https://github.com/ggml-org/llama.cpp/pull/27530),
+  [discussion #29268](https://github.com/ggml-org/llama.cpp/discussions/29268),
+  [kishida's fork](https://github.com/kishida/llama.cpp/blob/jev/docs/jev.md),
+  [Ollama PR #18606](https://github.com/ollama/ollama/pull/18606) and its
+  [adapter](https://github.com/ollama/ollama/blob/main/llm/llama_server_score.go),
+  [SGLang PR #40992](https://github.com/sgl-project/sglang/pull/40992) and
+  [#41208](https://github.com/sgl-project/sglang/pull/41208),
+  [llmman PR #579](https://github.com/llmmanorg/llmman/pull/579).
 
 ## The open decision-model ecosystem
 

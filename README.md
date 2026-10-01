@@ -7,7 +7,7 @@
 │    │   │   ╭─┤   ╲  ╱     │
 │    ╰─  ╰─  ╰─╯    ╲╱      │
 │                           │
-│  decisions from logprobs  │
+│  Large Language Verdicts  │
 ╰───────────────────────────╯
 ```
 
